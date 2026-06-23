@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QPolygonF
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QGraphicsOpacityEffect
 
-from app.ui.gauge_widget import TapeGauge
+from app.ui.gauge_widget import TapeGauge, BatteryGauge
 
 
 class AttitudeIndicator(QWidget):
@@ -126,9 +126,9 @@ class AttitudePanel(QWidget):
         self.compass = HeadingIndicator()
         self.speed_gauge = TapeGauge("Speed", "m/s")
         self.alt_gauge = TapeGauge("Altitude", "m")
-        self.bat1_volt_gauge = TapeGauge("Bat1 V", "V")
+        self.bat1_volt_gauge = BatteryGauge("Bat1 V", "V")
         self.bat1_curr_gauge = TapeGauge("Bat1 A", "A")
-        self.bat2_volt_gauge = TapeGauge("Bat2 V", "V")
+        self.bat2_volt_gauge = BatteryGauge("Bat2 V", "V")
         self.bat2_curr_gauge = TapeGauge("Bat2 A", "A")
 
         speed_box = QVBoxLayout()
@@ -197,6 +197,13 @@ class AttitudePanel(QWidget):
         self._bat_curr = {1: np.array([]), 2: np.array([])}
         self._bat_volt_gauges = {1: self.bat1_volt_gauge, 2: self.bat2_volt_gauge}
         self._bat_curr_gauges = {1: self.bat1_curr_gauge, 2: self.bat2_curr_gauge}
+        self._cell_count = 4  # Default 4S
+
+    def set_battery_cell_count(self, cell_count: int):
+        """Update the battery cell count for voltage-per-cell calculation."""
+        self._cell_count = cell_count
+        self.bat1_volt_gauge.set_cell_count(cell_count)
+        self.bat2_volt_gauge.set_cell_count(cell_count)
 
     def set_data(self, t: np.ndarray, roll: np.ndarray, pitch: np.ndarray, yaw: np.ndarray):
         self._t, self._roll, self._pitch, self._yaw = t, roll, pitch, yaw

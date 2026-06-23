@@ -248,6 +248,7 @@ class MainWindow(QMainWindow):
         self.map_widget.cursor_time_changed.connect(self._on_cursor_moved)
         self.events_widget.load(self.log_data)
         self.params_widget.load(self.log_data)
+        self.params_widget.battery_cell_count_changed.connect(self.attitude_panel.set_battery_cell_count)
         self.mission_widget.load(self.log_data)
         self._load_gps_track()
         self._load_timeline()
