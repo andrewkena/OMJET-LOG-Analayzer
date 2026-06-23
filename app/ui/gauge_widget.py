@@ -67,9 +67,22 @@ class BatteryGauge(QWidget):
         self._min = 0.0
         self._max = 1.0
         self._cell_count = cell_count
-        # Thresholds per cell (in volts)
-        self._full_voltage = 4.2  # 100% - green
-        self._empty_voltage = 3.6  # 0% - red
+        self._is_hv = False  # LiHV mode
+
+    def set_hv_mode(self, is_hv: bool):
+        """Enable/disable LiHV high voltage mode."""
+        self._is_hv = is_hv
+        self.update()
+
+    @property
+    def _full_voltage(self) -> float:
+        """Return full charge voltage per cell."""
+        return 4.35 if self._is_hv else 4.2
+
+    @property
+    def _empty_voltage(self) -> float:
+        """Return empty voltage per cell (same for both types)."""
+        return 3.6
 
     def set_cell_count(self, cell_count: int):
         """Update the number of cells for voltage calculation."""
@@ -88,15 +101,17 @@ class BatteryGauge(QWidget):
     def _get_fill_color(self, fraction: float) -> QColor:
         """Get color based on voltage per cell (0=empty/red, 1=full/green)."""
         voltage_per_cell = self._value / max(1, self._cell_count)
+        full_v = self._full_voltage
+        empty_v = self._empty_voltage
 
         # Color gradient: red (empty) -> yellow (mid) -> green (full)
-        if voltage_per_cell >= self._full_voltage:
+        if voltage_per_cell >= full_v:
             return QColor("#3cb44b")  # Green - full
-        elif voltage_per_cell <= self._empty_voltage:
+        elif voltage_per_cell <= empty_v:
             return QColor("#e6194b")  # Red - empty
         else:
             # Interpolate between red and green through yellow
-            ratio = (voltage_per_cell - self._empty_voltage) / (self._full_voltage - self._empty_voltage)
+            ratio = (voltage_per_cell - empty_v) / (full_v - empty_v)
             if ratio < 0.5:
                 # Red to yellow
                 r = 230

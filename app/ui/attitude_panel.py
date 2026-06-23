@@ -205,6 +205,11 @@ class AttitudePanel(QWidget):
         self.bat1_volt_gauge.set_cell_count(cell_count)
         self.bat2_volt_gauge.set_cell_count(cell_count)
 
+    def set_battery_hv_mode(self, is_hv: bool):
+        """Enable/disable LiHV high voltage mode."""
+        self.bat1_volt_gauge.set_hv_mode(is_hv)
+        self.bat2_volt_gauge.set_hv_mode(is_hv)
+
     def set_data(self, t: np.ndarray, roll: np.ndarray, pitch: np.ndarray, yaw: np.ndarray):
         self._t, self._roll, self._pitch, self._yaw = t, roll, pitch, yaw
         if len(t):

@@ -21,6 +21,7 @@ from app.ui.mission_widget import MissionWidget
 from app.ui.rc_panel import RCPanel
 from app.ui.attitude_panel import AttitudePanel
 from app.ui.motor_servo_panel import MotorServoPanel
+from app.ui.settings_widget import SettingsWidget
 from app.ui.theme import apply_dark_theme, apply_light_theme
 
 GPS_LAT_CANDIDATES = [("GPS", "Lat", "Lng"), ("GPS", "Lat", "Lon"), ("GLOBAL_POSITION_INT", "lat", "lon")]
@@ -70,6 +71,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_layout()
         self._build_status_bar()
+        self._connect_settings_signals()
 
     def _build_menu(self):
         menu = self.menuBar().addMenu("&File")
@@ -92,6 +94,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.hide()
         status.addPermanentWidget(self.progress_bar)
         self.setStatusBar(status)
+
+    def _connect_settings_signals(self):
+        """Connect settings signals to attitude panel."""
+        self.settings_widget.battery_cell_count_changed.connect(self.attitude_panel.set_battery_cell_count)
+        self.settings_widget.battery_hv_changed.connect(self.attitude_panel.set_battery_hv_mode)
 
     def _build_layout(self):
         self.message_tree = MessageTree()
@@ -165,6 +172,7 @@ class MainWindow(QMainWindow):
         self.events_widget.time_selected.connect(self._on_cursor_moved)
 
         self.params_widget = ParamsWidget()
+        self.settings_widget = SettingsWidget()
         self.mission_widget = MissionWidget()
 
         right_tabs = QTabWidget()
@@ -173,6 +181,7 @@ class MainWindow(QMainWindow):
         right_tabs.addTab(self.events_widget, "Events")
         right_tabs.addTab(self.params_widget, "Parameters")
         right_tabs.addTab(self.mission_widget, "Mission")
+        right_tabs.addTab(self.settings_widget, "Settings")
         right_tabs.setCurrentIndex(0)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -248,7 +257,6 @@ class MainWindow(QMainWindow):
         self.map_widget.cursor_time_changed.connect(self._on_cursor_moved)
         self.events_widget.load(self.log_data)
         self.params_widget.load(self.log_data)
-        self.params_widget.battery_cell_count_changed.connect(self.attitude_panel.set_battery_cell_count)
         self.mission_widget.load(self.log_data)
         self._load_gps_track()
         self._load_timeline()

@@ -7,9 +7,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QPushButton, QFileDialog, QMessageBox, QComboBox, QLabel, QGroupBox
+    QAbstractItemView, QPushButton, QFileDialog, QMessageBox
 )
-from PySide6.QtCore import Signal
 
 from app.core.log_loader import LogData
 
@@ -17,25 +16,9 @@ _COLUMN_COUNT = 3
 
 
 class ParamsWidget(QWidget):
-    battery_cell_count_changed = Signal(int)
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[dict] = []
-        self._battery_cells = 4  # Default 4S
-
-        # Battery settings group
-        battery_group = QGroupBox("Battery Settings")
-        battery_layout = QHBoxLayout(battery_group)
-
-        battery_layout.addWidget(QLabel("Battery Cell Count:"))
-
-        self.cell_combo = QComboBox()
-        self.cell_combo.addItems(["4S", "6S", "8S", "10S", "12S"])
-        self.cell_combo.setCurrentText("4S")
-        self.cell_combo.currentTextChanged.connect(self._on_cell_count_changed)
-        battery_layout.addWidget(self.cell_combo)
-        battery_layout.addStretch()
 
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter parameters...")
@@ -61,18 +44,8 @@ class ParamsWidget(QWidget):
             columns_layout.addWidget(table)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(battery_group)
         layout.addLayout(top_row)
         layout.addLayout(columns_layout)
-
-    def get_battery_cell_count(self) -> int:
-        """Return the currently selected battery cell count."""
-        return self._battery_cells
-
-    def _on_cell_count_changed(self, text: str):
-        """Handle battery cell count change."""
-        self._battery_cells = int(text.replace("S", ""))
-        self.battery_cell_count_changed.emit(self._battery_cells)
 
     def load(self, log_data: LogData):
         self._rows = log_data.parameters()
