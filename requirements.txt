@@ -1,0 +1,5 @@
+PySide6>=6.6
+pymavlink>=2.4.41
+pyqtgraph>=0.13
+numpy>=1.26
+pandas>=2.1
