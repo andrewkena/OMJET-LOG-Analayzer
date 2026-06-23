@@ -1,103 +1,103 @@
 # OMJET Log Analyzer
 
-An advanced desktop application for analyzing ArduPilot flight logs (.bin, .log, .tlog).
+Продвинутое десктопное приложение для анализа полётных логов ArduPilot (.bin, .log, .tlog).
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![PySide6](https://img.shields.io/badge/PySide6-6.6+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## Features
+## Возможности
 
-- **Log Parsing**: Supports .bin (dataflash), .log (text), and .tlog (telemetry) formats
-- **Interactive Maps**: GPS track visualization with basemap support
-- **Multi-Graph Display**: Up to 3 synchronized graphs with multiple curves
-- **Timeline Navigation**: Visual time scrubber with altitude backdrop
-- **Playback Mode**: Animate through the flight log at various speeds
-- **Parameter Viewer**: Browse and analyze flight parameters
-- **Event Detection**: Automatic event highlighting (arm/disarm, modes, etc.)
-- **RC Input Display**: Real-time RC channel visualization
-- **Attitude Panel**: Roll/Pitch/Yaw gauges with speed and altitude
-- **Motor/Servo Monitor**: PWM output visualization
-- **Dark/Light Theme**: User-selectable color scheme
+- **Парсинг логов**: Поддержка форматов .bin (dataflash), .log (текст), .tlog (телеметрия)
+- **Интерактивные карты**: Визуализация GPS-трека с выбором подложки
+- **Мультиграфики**: До 3 синхронизированных графиков с несколькими кривыми
+- **Временная шкала**: Визуальный скрubber с отображением высоты
+- **Режим воспроизведения**: Анимация пролёта лога с разной скоростью
+- **Просмотр параметров**: Обзор и анализ полётных параметров
+- **События**: Автоматическое выделение событий (арм/дизарм, режимы и т.д.)
+- **Отображение RC**: Визуализация каналов управления
+- **Панель ориентации**: Индикаторы крена/тангажа/рыскания, скорости и высоты
+- **Монитор моторов/сервоприводов**: Визуализация PWM сигналов
+- **Тёмная/светлая тема**: Переключаемое оформление
 
-## Installation
+## Установка
 
-### From Release (Windows)
-1. Download the latest `OMJET_Log_Analyzer.exe` from the [Releases](https://github.com/yourusername/omjet-log-analyzer/releases) page
-2. Run the executable - no installation required
+### Из релиза (Windows)
+1. Скачайте последнюю версию `OMJET_Log_Analyzer.exe` со страницы [Releases](https://github.com/andrewkena/OMJET-LOG-Analayzer/releases)
+2. Запустите исполняемый файл — установка не требуется
 
-### From Source
+### Из исходников
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/omjet-log-analyzer.git
-cd omjet-log-analyzer
+# Клонировать репозиторий
+git clone https://github.com/andrewkena/OMJET-LOG-Analayzer.git
+cd OMJET-LOG-Analayzer
 
-# Create virtual environment
+# Создать виртуальное окружение
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# Install dependencies
+# Установить зависимости
 pip install -r requirements.txt
 
-# Run the application
+# Запустить приложение
 python main.py
 ```
 
-## Usage
+## Использование
 
-1. Launch the application
-2. Click **File → Open Log...** or use Ctrl+O
-3. Select an ArduPilot log file (.bin, .log, or .tlog)
-4. Browse the loaded data:
-   - Use the **Message Tree** to select fields for graphing
-   - Switch to **Graph** tab to view selected parameters
-   - Use **Map** tab for GPS track visualization
-   - Check **Events** for flight event markers
+1. Запустите приложение
+2. Нажмите **Файл → Открыть лог...** или используйте Ctrl+O
+3. Выберите файл лога ArduPilot (.bin, .log или .tlog)
+4. Изучайте загруженные данные:
+   - Используйте **Дерево сообщений** для выбора полей на график
+   - Перейдите на вкладку **Графики** для просмотра выбранных параметров
+   - Откройте вкладку **Карта** для визуализации GPS-трека
+   - Проверьте вкладку **События** для отметок событий полёта
 
-### Graph Controls
-- Check fields in the message tree to add them to graphs
-- Use the dropdown to select which graph (1, 2, or 3) receives new curves
-- Click and drag on graphs to select time ranges
-- Use the timeline at the bottom to scrub through the flight
+### Управление графиками
+- Отмечайте поля в дереве сообщений, чтобы добавить их на графики
+- Выпадающий список выбирает целевой график (1, 2 или 3)
+- Выделяйте диапазон на графике мышкой для выбора временного диапазона
+- Используйте временную шкалу внизу для навигации по полёту
 
-### Playback
-- Click **▶ Play** to animate through the log
-- Adjust speed with the dropdown (x1, x2, x4)
-- Click **⏹ Stop** to reset to the beginning
+### Воспроизведение
+- Нажмите **▶ Воспроизвести** для анимации пролёта
+- Настройте скорость выпадающим списком (x1, x2, x4)
+- Нажмите **⏹ Стоп** для сброса в начало
 
-## Building from Source
+## Сборка из исходников
 
 ```bash
-# Install PyInstaller
+# Установить PyInstaller
 pip install pyinstaller
 
-# Build executable
+# Собрать исполняемый файл
 pyinstaller main.spec --clean
 
-# Find the executable in dist/OMJET_Log_Analyzer/
+# Исполняемый файл будет в dist/OMJET_Log_Analyzer/
 ```
 
-## Supported Log Formats
+## Поддерживаемые форматы логов
 
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| DataFlash | .bin | Binary log from SD card |
-| Text Log | .log | ASCII text format |
-| Telemetry | .tlog | MavLink telemetry log |
+| Формат | Расширение | Описание |
+|--------|------------|----------|
+| DataFlash | .bin | Бинарный лог с SD-карты |
+| Текстовый лог | .log | Формат ASCII |
+| Телеметрия | .tlog | MavLink телеметрия |
 
-## Dependencies
+## Зависимости
 
-- **PySide6** (>=6.6) - Qt GUI framework
-- **pymavlink** (>=2.4.41) - MavLink protocol support
-- **pyqtgraph** (>=0.13) - Fast plotting
-- **numpy** (>=1.26) - Numerical operations
-- **pandas** (>=2.1) - Data manipulation
+- **PySide6** (>=6.6) — Qt GUI фреймворк
+- **pymavlink** (>=2.4.41) — Поддержка протокола MavLink
+- **pyqtgraph** (>=0.13) — Быстрая отрисовка графиков
+- **numpy** (>=1.26) — Численные вычисления
+- **pandas** (>=2.1) — Обработка данных
 
-## License
+## Лицензия
 
-MIT License - see LICENSE file for details
+MIT License — подробности в файле LICENSE
 
-## Contributing
+## Вклад
 
-Contributions welcome! Please open an issue or submit a pull request.
+Вклад приветствуется! Открывайте issue или pull request.
