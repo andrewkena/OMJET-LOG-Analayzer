@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
             graph.clear_selected_range()
             graph.set_time_origin(log_data.start_time)
         self.map_widget.set_time_origin(log_data.start_time)
+        self.map_widget.cursor_time_changed.connect(self._on_cursor_moved)
         self.events_widget.load(self.log_data)
         self.params_widget.load(self.log_data)
         self.mission_widget.load(self.log_data)

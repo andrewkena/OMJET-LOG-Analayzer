@@ -7,17 +7,28 @@ from __future__ import annotations
 import json
 
 import numpy as np
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, Signal, QObject, Slot
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QComboBox
 
 from app.core.time_format import format_mmss
+
+
+class MapBridge(QObject):
+    """JavaScript bridge to receive cursor drag events from the map."""
+    cursor_dragged = Signal(float)
+
+    @Slot(float)
+    def onCursorDragged(self, time_val: float):
+        self.cursor_dragged.emit(time_val)
 
 _HTML = """<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <style>
 html,body,#map{height:100%;margin:0;padding:0;background:#222;}
 .time-tooltip{background:#e6194b;color:#fff;border:none;font-weight:bold;font-size:12px;}
@@ -87,10 +98,80 @@ var vtolIcon = L.divIcon({
     iconSize: [32, 32],
     iconAnchor: [16, 16]
 });
-var marker = L.marker([0, 0], {icon: vtolIcon}).addTo(map);
+var marker = L.marker([0, 0], {icon: vtolIcon, draggable: true}).addTo(map);
 marker.bindTooltip('00:00', {permanent: true, direction: 'top', offset: [0, -10], className: 'time-tooltip'});
 
+var pybridge = null;
+if (typeof QWebChannel !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        pybridge = channel.objects.pybridge;
+    });
+}
+
+function notifyCursorDragged(timeVal) {
+    if (pybridge) {
+        pybridge.onCursorDragged(timeVal);
+    }
+}
+
+var trackCoords = [];
+var trackTimes = [];
+
+function setTrackWithTimes(coords, times) {
+    trackCoords = coords;
+    trackTimes = times;
+    trackLine.setLatLngs(coords);
+    if (coords.length > 0) {
+        marker.setLatLng(coords[0]);
+        map.fitBounds(trackLine.getBounds(), {padding: [20, 20]});
+    }
+}
+
+marker.on('drag', function(e) {
+    if (trackCoords.length === 0) return;
+    var pos = e.target.getLatLng();
+    var minDist = Infinity;
+    var bestIdx = 0;
+    for (var i = 0; i < trackCoords.length; i++) {
+        var d = Math.pow(pos.lat - trackCoords[i][0], 2) + Math.pow(pos.lng - trackCoords[i][1], 2);
+        if (d < minDist) {
+            minDist = d;
+            bestIdx = i;
+        }
+    }
+    var nearestLat = trackCoords[bestIdx][0];
+    var nearestLng = trackCoords[bestIdx][1];
+    marker.setLatLng([nearestLat, nearestLng]);
+    if (trackTimes.length > bestIdx) {
+        var clickedTime = trackTimes[bestIdx];
+        notifyCursorDragged(clickedTime);
+    }
+});
+
+marker.on('dragend', function(e) {
+    if (trackCoords.length === 0) return;
+    var pos = e.target.getLatLng();
+    var minDist = Infinity;
+    var bestIdx = 0;
+    for (var i = 0; i < trackCoords.length; i++) {
+        var d = Math.pow(pos.lat - trackCoords[i][0], 2) + Math.pow(pos.lng - trackCoords[i][1], 2);
+        if (d < minDist) {
+            minDist = d;
+            bestIdx = i;
+        }
+    }
+    var nearestLat = trackCoords[bestIdx][0];
+    var nearestLng = trackCoords[bestIdx][1];
+    marker.setLatLng([nearestLat, nearestLng]);
+    if (trackTimes.length > bestIdx) {
+        var clickedTime = trackTimes[bestIdx];
+        notifyCursorDragged(clickedTime);
+    }
+});
+
 function setTrack(coords) {
+    trackCoords = coords;
+    trackTimes = [];
     trackLine.setLatLngs(coords);
     if (coords.length > 0) {
         marker.setLatLng(coords[0]);
@@ -138,6 +219,7 @@ function setMission(coords) {
 
 
 class MapWidget(QWidget):
+    cursor_time_changed = Signal(float)
     _BASEMAP_TYPES = [("Satellite", "s"), ("Hybrid", "y"), ("Roadmap", "m"), ("Terrain", "p")]
 
     def __init__(self, parent=None):
@@ -145,6 +227,15 @@ class MapWidget(QWidget):
         self.view = QWebEngineView()
         self._ready = False
         self._pending_js: list[str] = []
+
+        # Setup JavaScript bridge
+        self._bridge = MapBridge()
+        self._bridge.cursor_dragged.connect(self._on_map_cursor_dragged)
+
+        channel = QWebChannel(self.view.page())
+        channel.registerObject("pybridge", self._bridge)
+        self.view.page().setWebChannel(channel)
+
         self.view.loadFinished.connect(self._on_load_finished)
         self.view.setHtml(_HTML, QUrl("https://maps.google.com/"))
 
@@ -189,7 +280,7 @@ class MapWidget(QWidget):
     def set_track(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):
         self._t, self._lat, self._lon = t, lat, lon
         coords = list(zip(lat.tolist(), lon.tolist()))
-        self._run_js(f"setTrack({json.dumps(coords)});")
+        self._run_js(f"setTrackWithTimes({json.dumps(coords)}, {t.tolist()});")
 
     def set_heading_data(self, t: np.ndarray, heading: np.ndarray):
         self._heading_t, self._heading_v = t, heading
@@ -239,3 +330,7 @@ class MapWidget(QWidget):
 
     def set_follow(self, enabled: bool):
         self._run_js(f"setFollow({'true' if enabled else 'false'});")
+
+    def _on_map_cursor_dragged(self, time_val: float):
+        """Called when user drags the marker on the map."""
+        self.cursor_time_changed.emit(time_val)
