@@ -3,10 +3,9 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QSplitter, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QMessageBox, QStatusBar, QProgressBar, QToolBar, QComboBox, QLabel, QPushButton, QFrame
+    QMessageBox, QStatusBar, QProgressBar, QComboBox, QLabel, QPushButton, QFrame
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication
 
 from app.core.log_loader import LogData
@@ -22,7 +21,7 @@ from app.ui.rc_panel import RCPanel
 from app.ui.attitude_panel import AttitudePanel
 from app.ui.motor_servo_panel import MotorServoPanel
 from app.ui.settings_widget import SettingsWidget
-from app.ui.theme import apply_dark_theme, apply_light_theme
+from app.ui.theme import apply_dark_theme, apply_light_theme, apply_system_theme
 
 GPS_LAT_CANDIDATES = [("GPS", "Lat", "Lng"), ("GPS", "Lat", "Lon"), ("GLOBAL_POSITION_INT", "lat", "lon")]
 ALT_CANDIDATES = [("BARO", "Alt"), ("CTUN", "Alt"), ("GPS", "Alt"), ("GLOBAL_POSITION_INT", "relative_alt")]
@@ -54,11 +53,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ArduPilot Log Analyzer")
-        self.resize(1400, 900)
+        self.resize(1600, 1200)
 
         self.log_data: LogData | None = None
         self._worker: LogLoadWorker | None = None
-        self._dark_mode = False
         self._field_graph_assignment: dict[str, int] = {}
         self._current_time = 0.0
         self._playback_speed = 1.0
@@ -68,7 +66,6 @@ class MainWindow(QMainWindow):
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
         self._build_menu()
-        self._build_toolbar()
         self._build_layout()
         self._build_status_bar()
         self._connect_settings_signals()
@@ -77,14 +74,6 @@ class MainWindow(QMainWindow):
         menu = self.menuBar().addMenu("&File")
         open_action = menu.addAction("&Open Log...")
         open_action.triggered.connect(self.open_log_dialog)
-
-    def _build_toolbar(self):
-        toolbar = QToolBar("Main")
-        self.addToolBar(toolbar)
-        self.dark_theme_action = QAction("Dark Theme", self)
-        self.dark_theme_action.setCheckable(True)
-        self.dark_theme_action.toggled.connect(self._on_toggle_dark_theme)
-        toolbar.addAction(self.dark_theme_action)
 
     def _build_status_bar(self):
         status = QStatusBar()
@@ -99,6 +88,13 @@ class MainWindow(QMainWindow):
         """Connect settings signals to attitude panel."""
         self.settings_widget.battery_cell_count_changed.connect(self.attitude_panel.set_battery_cell_count)
         self.settings_widget.battery_hv_changed.connect(self.attitude_panel.set_battery_hv_mode)
+        self.settings_widget.current_thresholds_changed.connect(self.attitude_panel.set_current_thresholds)
+        self.settings_widget.speed_thresholds_changed.connect(self.attitude_panel.set_speed_thresholds)
+        self.settings_widget.theme_changed.connect(self._on_theme_changed)
+        self._on_theme_changed(self.settings_widget.current_theme())
+        self.attitude_panel.set_battery_cell_count(self.settings_widget.get_battery_cell_count())
+        self.attitude_panel.set_current_thresholds(*self.settings_widget.get_current_thresholds())
+        self.attitude_panel.set_speed_thresholds(*self.settings_widget.get_speed_thresholds())
 
     def _build_layout(self):
         self.message_tree = MessageTree()
@@ -159,6 +155,13 @@ class MainWindow(QMainWindow):
         playback_row.addWidget(QLabel("Type:"))
         playback_row.addWidget(self.map_widget.basemap_combo)
         playback_row.addWidget(self.map_widget.follow_checkbox)
+        playback_row.addSpacing(20)
+        photo_separator = QFrame()
+        photo_separator.setFrameShape(QFrame.VLine)
+        photo_separator.setFrameShadow(QFrame.Sunken)
+        playback_row.addWidget(photo_separator)
+        playback_row.addWidget(self.map_widget.show_photos_checkbox)
+        playback_row.addWidget(self.map_widget.photo_count_label)
         playback_row.addStretch()
 
         map_tab = QWidget()
@@ -265,6 +268,7 @@ class MainWindow(QMainWindow):
         self._load_speed_alt_gauges()
         self._load_battery_gauges()
         self._load_motor_servo_panel()
+        self._load_photo_counts()
         self.map_widget.set_mission(self.mission_widget.waypoints())
 
         self.statusBar().showMessage(
@@ -285,6 +289,24 @@ class MainWindow(QMainWindow):
                     lon = lon / 1e7
                 self.map_widget.set_track(table["timestamp"], lat, lon)
                 return
+
+    def _load_photo_counts(self):
+        if self.log_data is None:
+            return
+        cam_table = self.log_data.messages.get("CAM")
+        trig_table = self.log_data.messages.get("TRIG")
+        cam_count = len(cam_table["timestamp"]) if cam_table else 0
+        trig_count = len(trig_table["timestamp"]) if trig_table else 0
+        self.map_widget.set_photo_counts(cam_count, trig_count)
+        self.map_widget.set_cam_markers(self._marker_positions(cam_table))
+        self.map_widget.set_trig_markers(self._marker_positions(trig_table))
+
+    def _marker_positions(self, table: dict[str, np.ndarray] | None) -> list[tuple[float, float]]:
+        if not table:
+            return []
+        if "Lat" in table and "Lng" in table:
+            return list(zip(table["Lat"].tolist(), table["Lng"].tolist()))
+        return self.map_widget.positions_at_times(table["timestamp"])
 
     def _load_timeline(self):
         if self.log_data is None:
@@ -469,10 +491,11 @@ class MainWindow(QMainWindow):
             graph.set_selected_range(t0, t1)
         self.map_widget.highlight_range(t0, t1)
 
-    def _on_toggle_dark_theme(self, checked: bool):
-        self._dark_mode = checked
+    def _on_theme_changed(self, theme: str):
         app = QApplication.instance()
-        if checked:
+        if theme == "dark":
             apply_dark_theme(app)
-        else:
+        elif theme == "light":
             apply_light_theme(app)
+        else:
+            apply_system_theme(app)

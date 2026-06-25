@@ -28,3 +28,24 @@ def apply_dark_theme(app: QApplication):
 def apply_light_theme(app: QApplication):
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setPalette(app.style().standardPalette())
+
+
+def is_system_dark_mode() -> bool:
+    """Best-effort detection of the OS dark mode setting (Windows)."""
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        )
+        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return value == 0
+    except OSError:
+        return False
+
+
+def apply_system_theme(app: QApplication):
+    if is_system_dark_mode():
+        apply_dark_theme(app)
+    else:
+        apply_light_theme(app)

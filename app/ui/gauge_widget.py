@@ -9,7 +9,11 @@ from PySide6.QtWidgets import QWidget
 class TapeGauge(QWidget):
     """Vertical tape gauge for speed, altitude, and current displays."""
 
-    def __init__(self, title: str, unit: str, parent=None):
+    _GREEN = (60, 180, 75)
+    _YELLOW = (241, 196, 15)
+    _RED = (230, 25, 75)
+
+    def __init__(self, title: str, unit: str, current_warning: bool = False, parent=None):
         super().__init__(parent)
         self.setFixedSize(70, 120)
         self.title = title
@@ -17,6 +21,12 @@ class TapeGauge(QWidget):
         self._value = 0.0
         self._min = 0.0
         self._max = 1.0
+        self._color_mode = "current" if current_warning else None
+        self._green_threshold = 50.0
+        self._red_threshold = 100.0
+        self._speed_min = 16.0
+        self._speed_target = 20.0
+        self._speed_max = 24.0
 
     def set_range(self, vmin: float, vmax: float):
         self._min = vmin
@@ -26,6 +36,50 @@ class TapeGauge(QWidget):
     def set_value(self, value: float):
         self._value = value
         self.update()
+
+    def set_current_thresholds(self, green: float, red: float):
+        """Set the value at which the fill is fully green, and fully red."""
+        self._green_threshold = green
+        self._red_threshold = max(red, green + 0.1)
+        self.update()
+
+    def set_speed_thresholds(self, min_v: float, target_v: float, max_v: float):
+        """Set red(min) -> green(target) -> red(max) speed coloring thresholds."""
+        self._color_mode = "speed"
+        self._speed_min = min_v
+        self._speed_target = max(target_v, min_v + 0.1)
+        self._speed_max = max(max_v, self._speed_target + 0.1)
+        self.update()
+
+    @staticmethod
+    def _lerp_color(c0, c1, t: float) -> QColor:
+        t = max(0.0, min(1.0, t))
+        rgb = tuple(int(c0[i] + (c1[i] - c0[i]) * t) for i in range(3))
+        return QColor(*rgb)
+
+    def _fill_color(self) -> QColor:
+        if self._color_mode == "current":
+            green_v, red_v = self._green_threshold, self._red_threshold
+            if self._value <= green_v:
+                return QColor("#3cb44b")  # Green
+            if self._value >= red_v:
+                return QColor("#e6194b")  # Red
+            ratio = (self._value - green_v) / (red_v - green_v)
+            if ratio < 0.5:
+                return self._lerp_color(self._GREEN, self._YELLOW, ratio * 2)
+            return self._lerp_color(self._YELLOW, self._RED, (ratio - 0.5) * 2)
+
+        if self._color_mode == "speed":
+            min_v, target_v, max_v = self._speed_min, self._speed_target, self._speed_max
+            if self._value <= min_v:
+                return QColor("#e6194b")  # Red
+            if self._value <= target_v:
+                return self._lerp_color(self._RED, self._GREEN, (self._value - min_v) / (target_v - min_v))
+            if self._value <= max_v:
+                return self._lerp_color(self._GREEN, self._RED, (self._value - target_v) / (max_v - target_v))
+            return QColor("#e6194b")  # Red
+
+        return QColor("#3cb44b")  # Green - normal
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -47,7 +101,7 @@ class TapeGauge(QWidget):
         fill_height = bar_rect.height() * frac
         fill_rect = QRectF(bar_rect.left(), bar_rect.bottom() - fill_height, bar_rect.width(), fill_height)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#3cb44b"))
+        painter.setBrush(self._fill_color())
         painter.drawRect(fill_rect)
 
         painter.setPen(QColor("white"))

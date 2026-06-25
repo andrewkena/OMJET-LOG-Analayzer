@@ -127,9 +127,9 @@ class AttitudePanel(QWidget):
         self.speed_gauge = TapeGauge("Speed", "m/s")
         self.alt_gauge = TapeGauge("Altitude", "m")
         self.bat1_volt_gauge = BatteryGauge("Bat1 V", "V")
-        self.bat1_curr_gauge = TapeGauge("Bat1 A", "A")
+        self.bat1_curr_gauge = TapeGauge("Bat1 A", "A", current_warning=True)
         self.bat2_volt_gauge = BatteryGauge("Bat2 V", "V")
-        self.bat2_curr_gauge = TapeGauge("Bat2 A", "A")
+        self.bat2_curr_gauge = TapeGauge("Bat2 A", "A", current_warning=True)
 
         speed_box = QVBoxLayout()
         speed_box.addStretch()
@@ -197,7 +197,7 @@ class AttitudePanel(QWidget):
         self._bat_curr = {1: np.array([]), 2: np.array([])}
         self._bat_volt_gauges = {1: self.bat1_volt_gauge, 2: self.bat2_volt_gauge}
         self._bat_curr_gauges = {1: self.bat1_curr_gauge, 2: self.bat2_curr_gauge}
-        self._cell_count = 4  # Default 4S
+        self._cell_count = 8  # Default 8S
 
     def set_battery_cell_count(self, cell_count: int):
         """Update the battery cell count for voltage-per-cell calculation."""
@@ -209,6 +209,15 @@ class AttitudePanel(QWidget):
         """Enable/disable LiHV high voltage mode."""
         self.bat1_volt_gauge.set_hv_mode(is_hv)
         self.bat2_volt_gauge.set_hv_mode(is_hv)
+
+    def set_current_thresholds(self, green: float, red: float):
+        """Update the green/red coloring thresholds for the current gauges."""
+        self.bat1_curr_gauge.set_current_thresholds(green, red)
+        self.bat2_curr_gauge.set_current_thresholds(green, red)
+
+    def set_speed_thresholds(self, min_v: float, target_v: float, max_v: float):
+        """Update the red(min)/green(target)/red(max) coloring thresholds for the speed gauge."""
+        self.speed_gauge.set_speed_thresholds(min_v, target_v, max_v)
 
     def set_data(self, t: np.ndarray, roll: np.ndarray, pitch: np.ndarray, yaw: np.ndarray):
         self._t, self._roll, self._pitch, self._yaw = t, roll, pitch, yaw

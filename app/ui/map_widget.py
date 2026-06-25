@@ -10,7 +10,7 @@ import numpy as np
 from PySide6.QtCore import QUrl, Signal, QObject, Slot
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QComboBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QComboBox, QLabel
 
 from app.core.time_format import format_mmss
 
@@ -87,6 +87,17 @@ var followEnabled = false;
 var highlightLine = L.polyline([], {color: '#ffeb3b', weight: 6, opacity: 0.9}).addTo(map);
 var missionLine = L.polyline([], {color: '#00e5ff', weight: 2, dashArray: '6,6'}).addTo(map);
 var missionMarkers = L.layerGroup().addTo(map);
+var camMarkers = L.layerGroup().addTo(map);
+var trigMarkers = L.layerGroup().addTo(map);
+function squareIcon(color, size) {
+    var half = size / 2;
+    return L.divIcon({
+        className: 'square-marker-icon',
+        html: '<div style="width:' + size + 'px;height:' + size + 'px;background:' + color + ';border:1px solid #222;"></div>',
+        iconSize: [size, size],
+        iconAnchor: [half, half]
+    });
+}
 var vtolIconHtml = '<svg width="32" height="32" viewBox="0 0 24 24">' +
     '<g transform="rotate(0 12 12)">' +
     '<path d="M12 2 L13.2 9.2 L21 15 L21 16.8 L13 14.3 L13.6 19.2 L16 21 L16 22 L12 21 L8 22 L8 21 L10.4 19.2 L11 14.3 L3 16.8 L3 15 L10.8 9.2 Z" ' +
@@ -201,6 +212,25 @@ function setFollow(enabled) {
 function setHighlight(coords) {
     highlightLine.setLatLngs(coords);
 }
+function setCamMarkers(coords) {
+    camMarkers.clearLayers();
+    coords.forEach(function(c) {
+        L.marker(c, {icon: squareIcon('#ffeb3b', 5)}).addTo(camMarkers);
+    });
+}
+function setCamMarkersVisible(visible) {
+    if (visible && !map.hasLayer(camMarkers)) {
+        camMarkers.addTo(map);
+    } else if (!visible && map.hasLayer(camMarkers)) {
+        camMarkers.remove();
+    }
+}
+function setTrigMarkers(coords) {
+    trigMarkers.clearLayers();
+    coords.forEach(function(c) {
+        L.marker(c, {icon: squareIcon('#3cb44b', 10)}).addTo(trigMarkers);
+    });
+}
 function setMission(coords) {
     missionLine.setLatLngs(coords);
     missionMarkers.clearLayers();
@@ -250,6 +280,13 @@ class MapWidget(QWidget):
 
         self.follow_checkbox = QCheckBox("Follow aircraft")
         self.follow_checkbox.toggled.connect(self.set_follow)
+
+        self.show_photos_checkbox = QCheckBox("Отобразить фотографии")
+        self.show_photos_checkbox.setChecked(True)
+        self.show_photos_checkbox.toggled.connect(self.set_cam_markers_visible)
+
+        self.photo_count_label = QLabel("Количество фотографий: —")
+        self.photo_count_label.setStyleSheet("color: white;")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -318,8 +355,36 @@ class MapWidget(QWidget):
     def clear_highlight(self):
         self._run_js("setHighlight([]);")
 
+    def set_photo_counts(self, cam_count: int | None, trig_count: int | None):
+        if not cam_count and not trig_count:
+            self.photo_count_label.setText("Количество фотографий: —")
+            return
+        parts = []
+        if cam_count:
+            parts.append(f"количество импульсов для фото: {cam_count}")
+        if trig_count:
+            parts.append(f"количество импульсов обратной связи: {trig_count}")
+        self.photo_count_label.setText("Количество фотографий — " + ", ".join(parts))
+
     def set_mission(self, waypoints: list[tuple[float, float]]):
         self._run_js(f"setMission({json.dumps(waypoints)});")
+
+    def set_cam_markers(self, coords: list[tuple[float, float]]):
+        self._run_js(f"setCamMarkers({json.dumps(coords)});")
+
+    def set_cam_markers_visible(self, visible: bool):
+        self._run_js(f"setCamMarkersVisible({'true' if visible else 'false'});")
+
+    def set_trig_markers(self, coords: list[tuple[float, float]]):
+        self._run_js(f"setTrigMarkers({json.dumps(coords)});")
+
+    def positions_at_times(self, t: np.ndarray) -> list[tuple[float, float]]:
+        """Interpolate lat/lon along the loaded track for the given timestamps."""
+        if len(self._t) == 0 or len(t) == 0:
+            return []
+        lat = np.interp(t, self._t, self._lat)
+        lon = np.interp(t, self._t, self._lon)
+        return list(zip(lat.tolist(), lon.tolist()))
 
     def set_basemap_visible(self, visible: bool):
         self._run_js(f"setBasemapVisible({'true' if visible else 'false'});")
