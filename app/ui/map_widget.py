@@ -47,7 +47,8 @@ var map = L.map('map', {
     doubleClickZoom: true,
     touchZoom: true,
     boxZoom: true,
-    zoomSnap: 0
+    zoomSnap: 0,
+    attributionControl: false
 }).setView([0, 0], 2);
 function googleLayer(lyrs, maxZoom) {
     return L.tileLayer('https://{s}.google.com/vt/lyrs=' + lyrs + '&x={x}&y={y}&z={z}', {
