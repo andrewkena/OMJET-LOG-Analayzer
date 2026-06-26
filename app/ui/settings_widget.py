@@ -16,10 +16,15 @@ class SettingsWidget(QWidget):
     battery_hv_changed = Signal(bool)
     current_thresholds_changed = Signal(float, float)  # green, red
     speed_thresholds_changed = Signal(float, float, float)  # min, target, max
+    max_wind_changed = Signal(float)  # max wind speed, m/s
     theme_changed = Signal(str)  # "light", "dark", or "system"
+    timezone_changed = Signal(float)  # UTC offset in hours
+    language_changed = Signal(str)  # "ru" or "en"
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._utc_offset = 0.0
+        self._language = "ru"
         self._battery_cells = 8
         self._battery_hv = False
         self._current_green = 50
@@ -27,6 +32,7 @@ class SettingsWidget(QWidget):
         self._speed_min = 16
         self._speed_target = 20
         self._speed_max = 24
+        self._max_wind = 12
 
         layout = QVBoxLayout(self)
 
@@ -40,6 +46,22 @@ class SettingsWidget(QWidget):
         self.theme_combo.setCurrentIndex(2)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         theme_layout.addRow("Тема:", self.theme_combo)
+
+        self.timezone_combo = QComboBox()
+        for offset in range(-12, 15):
+            label = "UTC" if offset == 0 else f"UTC{offset:+d}"
+            self.timezone_combo.addItem(label, float(offset))
+        self.timezone_combo.setCurrentIndex(self.timezone_combo.findData(0.0))
+        self.timezone_combo.currentIndexChanged.connect(self._on_timezone_changed)
+        theme_layout.addRow("Часовой пояс:", self.timezone_combo)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("Русский", "ru")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.setCurrentIndex(self.language_combo.findData("ru"))
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        theme_layout.addRow("Язык:", self.language_combo)
+
         layout.addWidget(theme_group)
 
         # Battery Configuration
@@ -117,6 +139,13 @@ class SettingsWidget(QWidget):
         speed_row.addWidget(self.speed_max_spin)
         color_layout.addRow("Скорость:", speed_row)
 
+        self.max_wind_spin = QSpinBox()
+        self.max_wind_spin.setRange(0, 100)
+        self.max_wind_spin.setSuffix(" м/с")
+        self.max_wind_spin.setValue(self._max_wind)
+        self.max_wind_spin.valueChanged.connect(self._on_max_wind_changed)
+        color_layout.addRow("Максимальный ветер:", self.max_wind_spin)
+
         layout.addWidget(color_group)
 
         # Info section
@@ -141,6 +170,24 @@ class SettingsWidget(QWidget):
     def current_theme(self) -> str:
         """Return the currently selected theme ('light', 'dark', or 'system')."""
         return self.theme_combo.currentData()
+
+    def _on_timezone_changed(self, index: int):
+        """Handle timezone selection change."""
+        self._utc_offset = self.timezone_combo.itemData(index)
+        self.timezone_changed.emit(self._utc_offset)
+
+    def get_utc_offset(self) -> float:
+        """Return the currently selected UTC offset in hours."""
+        return self._utc_offset
+
+    def _on_language_changed(self, index: int):
+        """Handle language selection change."""
+        self._language = self.language_combo.itemData(index)
+        self.language_changed.emit(self._language)
+
+    def get_language(self) -> str:
+        """Return the currently selected language code ('ru' or 'en')."""
+        return self._language
 
     def _on_cell_count_changed(self, text: str):
         """Handle battery cell count change."""
@@ -204,3 +251,12 @@ class SettingsWidget(QWidget):
     def get_speed_thresholds(self) -> tuple[float, float, float]:
         """Return the (min, target, max) speed coloring thresholds."""
         return float(self._speed_min), float(self._speed_target), float(self._speed_max)
+
+    def _on_max_wind_changed(self, value: int):
+        """Handle max wind threshold change."""
+        self._max_wind = value
+        self.max_wind_changed.emit(float(self._max_wind))
+
+    def get_max_wind(self) -> float:
+        """Return the max wind speed threshold (m/s) for map highlighting."""
+        return float(self._max_wind)

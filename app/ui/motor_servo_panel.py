@@ -14,8 +14,21 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
 from app.ui.gauge_widget import TapeGauge, DeflectionGauge
 
 _NEUTRAL_PWM = 1500.0
-_MOTOR_KEYS = ["Motor1", "Motor2", "Motor3", "Motor4"]
+_MOTOR_PWM_MIN = 1100.0
+_MOTOR_PWM_MAX = 2000.0
+_MOTOR_KEYS = ["Motor3", "Motor1", "Motor2", "Motor4"]
+_MOTOR_LABELS = {
+    "Motor1": "Передний\nправый",
+    "Motor2": "Задний\nлевый",
+    "Motor3": "Передний\nлевый",
+    "Motor4": "Задний\nправый",
+}
 _SURFACE_KEYS = ["Aileron", "Elevator", "Rudder"]
+_SURFACE_LABELS = {
+    "Aileron": "Элероны",
+    "Elevator": "Руль\nвысоты",
+    "Rudder": "Руль\nнаправления",
+}
 
 
 def _vline() -> QFrame:
@@ -25,48 +38,91 @@ def _vline() -> QFrame:
     return frame
 
 
+def _column_container(height: int, header_widgets, row_layout) -> QWidget:
+    """Wrap a header (labels/separator) + row of gauges in a fixed-height widget
+    so the row is anchored to the bottom, aligning gauge bottoms across columns."""
+    container = QWidget()
+    vbox = QVBoxLayout(container)
+    vbox.setContentsMargins(0, 0, 0, 0)
+    for widget in header_widgets:
+        if isinstance(widget, QFrame):
+            vbox.addWidget(widget)
+        else:
+            vbox.addWidget(widget, alignment=Qt.AlignHCenter)
+    vbox.addStretch()
+    vbox.addLayout(row_layout)
+    container.setFixedHeight(height)
+    return container
+
+
 class MotorServoPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(160)
+        self.setFixedHeight(260)
 
-        self.throttle_gauge = TapeGauge("Main Motor", "%")
-        self.motor_gauges = {key: TapeGauge(f"M{i + 1}", "%") for i, key in enumerate(_MOTOR_KEYS)}
-        self.aileron_gauge = DeflectionGauge("Aileron")
-        self.elevator_gauge = DeflectionGauge("Elevator")
-        self.rudder_gauge = DeflectionGauge("Rudder")
+        self.throttle_gauge = TapeGauge("", "%")
+        self.motor_gauges = {key: TapeGauge("", "%") for key in _MOTOR_KEYS}
+        self.aileron_gauge = DeflectionGauge("")
+        self.elevator_gauge = DeflectionGauge("")
+        self.rudder_gauge = DeflectionGauge("")
 
         self._gauges = {"Throttle": self.throttle_gauge, **self.motor_gauges,
                          "Aileron": self.aileron_gauge, "Elevator": self.elevator_gauge,
                          "Rudder": self.rudder_gauge}
 
-        fwd_box = QVBoxLayout()
-        fwd_box.addStretch()
-        fwd_box.addWidget(self.throttle_gauge)
-        fwd_box.addStretch()
+        _BOLD_STYLE = "font-weight: bold;"
 
-        motors_box = QVBoxLayout()
-        motors_box.addWidget(QLabel("Quad Motors"), alignment=Qt.AlignHCenter)
+        fwd_label = QLabel("Ходовой\nмотор")
+        fwd_label.setAlignment(Qt.AlignHCenter)
+        fwd_label.setStyleSheet(_BOLD_STYLE)
+
+        fwd_gauge_row = QHBoxLayout()
+        fwd_gauge_row.addStretch()
+        fwd_gauge_row.addWidget(self.throttle_gauge)
+        fwd_gauge_row.addStretch()
+
+        fwd_container = _column_container(260, [fwd_label], fwd_gauge_row)
+
+        motors_label = QLabel("Вертикальные моторы")
+        motors_label.setAlignment(Qt.AlignCenter)
+        motors_label.setStyleSheet(_BOLD_STYLE)
+        motors_separator = QFrame()
+        motors_separator.setFrameShape(QFrame.HLine)
+        motors_separator.setFrameShadow(QFrame.Sunken)
         motors_row = QHBoxLayout()
         for key in _MOTOR_KEYS:
-            motors_row.addWidget(self.motor_gauges[key])
-        motors_box.addLayout(motors_row)
+            motor_label = QLabel(_MOTOR_LABELS[key])
+            motor_label.setAlignment(Qt.AlignHCenter)
+            motor_col = QVBoxLayout()
+            motor_col.addWidget(motor_label, alignment=Qt.AlignHCenter)
+            motor_col.addWidget(self.motor_gauges[key], alignment=Qt.AlignHCenter)
+            motors_row.addLayout(motor_col)
+        motors_container = _column_container(260, [motors_label, motors_separator], motors_row)
 
-        surfaces_box = QVBoxLayout()
-        surfaces_box.addWidget(QLabel("Control Surfaces"), alignment=Qt.AlignHCenter)
+        surfaces_label = QLabel("Управляющие поверхности")
+        surfaces_label.setAlignment(Qt.AlignCenter)
+        surfaces_label.setStyleSheet(_BOLD_STYLE)
+        surfaces_separator = QFrame()
+        surfaces_separator.setFrameShape(QFrame.HLine)
+        surfaces_separator.setFrameShadow(QFrame.Sunken)
         surfaces_row = QHBoxLayout()
-        surfaces_row.addWidget(self.aileron_gauge)
-        surfaces_row.addWidget(self.elevator_gauge)
-        surfaces_row.addWidget(self.rudder_gauge)
-        surfaces_box.addLayout(surfaces_row)
+        surface_gauges = {"Aileron": self.aileron_gauge, "Elevator": self.elevator_gauge, "Rudder": self.rudder_gauge}
+        for key in _SURFACE_KEYS:
+            surface_label = QLabel(_SURFACE_LABELS[key])
+            surface_label.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            surface_label.setFixedHeight(32)
+            surface_col = QVBoxLayout()
+            surface_col.addWidget(surface_label, alignment=Qt.AlignHCenter)
+            surface_col.addWidget(surface_gauges[key], alignment=Qt.AlignHCenter)
+            surfaces_row.addLayout(surface_col)
+        surfaces_container = _column_container(260, [surfaces_label, surfaces_separator], surfaces_row)
 
         layout = QHBoxLayout(self)
-        layout.addLayout(fwd_box)
+        layout.addWidget(fwd_container, alignment=Qt.AlignTop)
         layout.addWidget(_vline())
-        layout.addLayout(motors_box)
+        layout.addWidget(motors_container, alignment=Qt.AlignTop)
         layout.addWidget(_vline())
-        layout.addLayout(surfaces_box)
-        layout.addStretch()
+        layout.addWidget(surfaces_container, alignment=Qt.AlignTop)
 
         self._series: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -83,11 +139,13 @@ class MotorServoPanel(QWidget):
         gauge = self._gauges.get(key)
         if gauge is None:
             return
+        gauge.set_extra_text(f"{pwm_value:.0f}")
         if isinstance(gauge, DeflectionGauge):
             gauge.set_value((pwm_value - _NEUTRAL_PWM) / 500.0)
         else:
             gauge.set_range(0.0, 100.0)
-            gauge.set_value(max(0.0, min(100.0, (pwm_value - 1000.0) / 1000.0 * 100.0)))
+            pct = (pwm_value - _MOTOR_PWM_MIN) / (_MOTOR_PWM_MAX - _MOTOR_PWM_MIN) * 100.0
+            gauge.set_value(max(0.0, min(100.0, pct)))
 
     def set_cursor_time(self, t: float):
         for key, (tarr, values) in self._series.items():

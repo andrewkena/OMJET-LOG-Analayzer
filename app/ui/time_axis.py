@@ -10,6 +10,7 @@ class TimeAxisItem(pg.AxisItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.t0 = 0.0
+        self.enableAutoSIPrefix(False)
 
     def set_origin(self, t0: float):
         self.t0 = t0

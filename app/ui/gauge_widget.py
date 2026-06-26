@@ -13,11 +13,16 @@ class TapeGauge(QWidget):
     _YELLOW = (241, 196, 15)
     _RED = (230, 25, 75)
 
-    def __init__(self, title: str, unit: str, current_warning: bool = False, parent=None):
+    def __init__(self, title: str, unit: str, current_warning: bool = False, bold_title: bool = False,
+                 extra_label: str | None = "PWM", unit_inline: bool = False, parent=None):
         super().__init__(parent)
-        self.setFixedSize(70, 120)
         self.title = title
         self.unit = unit
+        self._bold_title = bold_title
+        self._extra_label = extra_label
+        self._unit_inline = unit_inline
+        self._title_offset = 14 * title.count("\n")
+        self.setFixedSize(70, 170 + self._title_offset)
         self._value = 0.0
         self._min = 0.0
         self._max = 1.0
@@ -27,6 +32,7 @@ class TapeGauge(QWidget):
         self._speed_min = 16.0
         self._speed_target = 20.0
         self._speed_max = 24.0
+        self._extra_text = ""
 
     def set_range(self, vmin: float, vmax: float):
         self._min = vmin
@@ -35,6 +41,11 @@ class TapeGauge(QWidget):
 
     def set_value(self, value: float):
         self._value = value
+        self.update()
+
+    def set_extra_text(self, text: str):
+        """Set extra text (e.g. raw PWM) shown in parentheses below the value."""
+        self._extra_text = text
         self.update()
 
     def set_current_thresholds(self, green: float, red: float):
@@ -86,10 +97,19 @@ class TapeGauge(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect()
 
+        title_rect_height = 14 + self._title_offset
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, 0, rect.width(), 14), Qt.AlignCenter, self.title)
+        if self._bold_title:
+            font = painter.font()
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(QRectF(0, 0, rect.width(), title_rect_height), Qt.AlignCenter, self.title)
+            font.setBold(False)
+            painter.setFont(font)
+        else:
+            painter.drawText(QRectF(0, 0, rect.width(), title_rect_height), Qt.AlignCenter, self.title)
 
-        bar_rect = QRectF(rect.width() / 2 - 10, 15, 20, 50)
+        bar_rect = QRectF(rect.width() / 2 - 10, 15 + self._title_offset, 20, 100)
         painter.setPen(QPen(QColor("#888888"), 1))
         painter.setBrush(QColor(25, 25, 25))
         painter.drawRect(bar_rect)
@@ -105,8 +125,18 @@ class TapeGauge(QWidget):
         painter.drawRect(fill_rect)
 
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, 70, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}")
-        painter.drawText(QRectF(0, 86, rect.width(), 14), Qt.AlignCenter, self.unit)
+        value_y = 120 + self._title_offset
+        if self.unit == "%":
+            painter.drawText(QRectF(0, value_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}{self.unit}")
+        elif self._unit_inline:
+            painter.drawText(QRectF(0, value_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f} {self.unit}")
+        else:
+            painter.drawText(QRectF(0, value_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}")
+            painter.drawText(QRectF(0, value_y + 16, rect.width(), 14), Qt.AlignCenter, self.unit)
+        if self._extra_text:
+            extra = f"{self._extra_label}: {self._extra_text}" if self._extra_label else f"({self._extra_text})"
+            extra_y = value_y + 16 if (self.unit == "%" or self._unit_inline) else value_y + 30
+            painter.drawText(QRectF(0, extra_y, rect.width(), 16), Qt.AlignCenter, extra)
 
 
 class BatteryGauge(QWidget):
@@ -221,12 +251,18 @@ class DeflectionGauge(QWidget):
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(60, 120)
+        self.setFixedSize(60, 170)
         self.title = title
         self._value = 0.0
+        self._extra_text = ""
 
     def set_value(self, value: float):
         self._value = max(-1.0, min(1.0, value))
+        self.update()
+
+    def set_extra_text(self, text: str):
+        """Set extra text (e.g. raw PWM) shown in parentheses below the value."""
+        self._extra_text = text
         self.update()
 
     def paintEvent(self, event):
@@ -235,9 +271,10 @@ class DeflectionGauge(QWidget):
         rect = self.rect()
 
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, 0, rect.width(), 14), Qt.AlignCenter, self.title)
+        if self.title:
+            painter.drawText(QRectF(0, 0, rect.width(), 14), Qt.AlignCenter, self.title)
 
-        bar_rect = QRectF(rect.width() / 2 - 10, 16, 20, 64)
+        bar_rect = QRectF(rect.width() / 2 - 10, 15, 20, 100)
         painter.setPen(QPen(QColor("#888888"), 1))
         painter.setBrush(QColor(25, 25, 25))
         painter.drawRect(bar_rect)
@@ -252,4 +289,6 @@ class DeflectionGauge(QWidget):
         painter.drawRect(QRectF(bar_rect.left() - 2, marker_y - 3, bar_rect.width() + 4, 6))
 
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, 86, rect.width(), 16), Qt.AlignCenter, f"{self._value * 100:.0f}%")
+        painter.drawText(QRectF(0, 120, rect.width(), 16), Qt.AlignCenter, f"{self._value * 100:.0f}%")
+        if self._extra_text:
+            painter.drawText(QRectF(0, 136, rect.width(), 16), Qt.AlignCenter, f"PWM: {self._extra_text}")

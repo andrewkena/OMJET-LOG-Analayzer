@@ -23,12 +23,15 @@ class TimelineWidget(QWidget):
         self.plot_widget.setFixedHeight(100)
         self.plot_widget.showGrid(x=True, y=False, alpha=0.3)
         self.plot_widget.getPlotItem().hideAxis("left")
-        self.plot_widget.setLabel("bottom", "Time (mm:ss)")
+        self.plot_widget.setLabel("bottom", "Время (мм:сс)")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.plot_widget)
 
+        self.terrain_curve = self.plot_widget.plot(
+            [], [], pen=pg.mkPen("#8b5a2b", width=1), fillLevel=0, brush=pg.mkBrush(139, 90, 43, 110)
+        )
         self.backdrop_curve = self.plot_widget.plot([], [], pen=pg.mkPen("#888", width=1))
 
         self.region = pg.LinearRegionItem(brush=pg.mkBrush(255, 255, 255, 40))
@@ -50,7 +53,8 @@ class TimelineWidget(QWidget):
         self._suppress = False
 
     def set_range(self, t0: float, t1: float, backdrop_t: np.ndarray | None = None,
-                  backdrop_y: np.ndarray | None = None):
+                  backdrop_y: np.ndarray | None = None, terrain_t: np.ndarray | None = None,
+                  terrain_y: np.ndarray | None = None):
         self._t0, self._t1 = t0, t1
         self.time_axis.set_origin(t0)
         self._suppress = True
@@ -64,6 +68,10 @@ class TimelineWidget(QWidget):
             self.backdrop_curve.setData(backdrop_t, backdrop_y)
         else:
             self.backdrop_curve.setData([], [])
+        if terrain_t is not None and terrain_y is not None and len(terrain_t):
+            self.terrain_curve.setData(terrain_t, terrain_y)
+        else:
+            self.terrain_curve.setData([], [])
         self._update_time_label(t0)
 
     def set_cursor_time(self, t: float):

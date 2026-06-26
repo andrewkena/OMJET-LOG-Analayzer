@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy
 
 _CENTER_PWM = 1500.0
 _RANGE_PWM = 500.0
@@ -19,7 +19,7 @@ def _normalize(pwm: float) -> float:
 class JoystickWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(100, 100)
+        self.setFixedSize(150, 150)
         self._x = 0.0
         self._y = 0.0
 
@@ -55,30 +55,50 @@ class JoystickWidget(QWidget):
 class RCPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(150)
+        self.setFixedHeight(260)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
 
         self.left_stick = JoystickWidget()
         self.right_stick = JoystickWidget()
 
+        self.value_labels = {ch: QLabel(f"RC{ch}: --") for ch in (1, 2, 3, 4)}
+
+        left_title = QLabel("Газ (RC3) / Курс (RC4)")
+        left_title.setStyleSheet("font-weight: bold;")
+        left_values_row = QHBoxLayout()
+        left_values_row.addStretch()
+        left_values_row.addWidget(self.value_labels[3])
+        left_values_row.addWidget(self.value_labels[4])
+        left_values_row.addStretch()
+
         left_box = QVBoxLayout()
-        left_box.addWidget(QLabel("Throttle / Yaw (RC3 / RC4)"), alignment=Qt.AlignHCenter)
-        left_box.addWidget(self.left_stick)
+        left_box.addWidget(left_title, alignment=Qt.AlignHCenter)
+        left_box.addWidget(self.left_stick, 1)
+        left_box.addSpacing(15)
+        left_box.addLayout(left_values_row)
+
+        right_title = QLabel("Крен (RC1) / Тангаж (RC2)")
+        right_title.setStyleSheet("font-weight: bold;")
+        right_values_row = QHBoxLayout()
+        right_values_row.addStretch()
+        right_values_row.addWidget(self.value_labels[1])
+        right_values_row.addWidget(self.value_labels[2])
+        right_values_row.addStretch()
 
         right_box = QVBoxLayout()
-        right_box.addWidget(QLabel("Roll / Pitch (RC1 / RC2)"), alignment=Qt.AlignHCenter)
-        right_box.addWidget(self.right_stick)
-
-        self.value_labels = {ch: QLabel(f"RC{ch}: --") for ch in (1, 2, 3, 4)}
-        values_box = QVBoxLayout()
-        for ch in (1, 2, 3, 4):
-            values_box.addWidget(self.value_labels[ch])
-        values_box.addStretch()
+        right_box.addWidget(right_title, alignment=Qt.AlignHCenter)
+        right_box.addWidget(self.right_stick, 1)
+        right_box.addSpacing(15)
+        right_box.addLayout(right_values_row)
 
         layout = QHBoxLayout(self)
+        margins = layout.contentsMargins()
+        layout.setContentsMargins(margins.left(), margins.top(), margins.right(), margins.bottom() // 2)
+        layout.addSpacing(10)
         layout.addLayout(left_box)
+        layout.addSpacing(20)
         layout.addLayout(right_box)
-        layout.addLayout(values_box)
-        layout.addStretch()
+        layout.addSpacing(10)
 
         self._t = np.array([])
         self._c1 = np.array([])

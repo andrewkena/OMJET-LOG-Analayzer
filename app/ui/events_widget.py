@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QAbstractItemView
 
 from app.core.log_loader import LogData
 from app.core.time_format import format_mmss, format_gps_time
+from app.core.event_decoder import decode_event, decode_error
 
 _CRITICAL_COLOR = QColor("#ff5555")
 _RESOLVED_WORDS = ("off", "cleared", "resolved", "restored")
@@ -22,9 +23,9 @@ def _format_message(row: dict) -> str:
     if msg_type == "MSG":
         return str(row.get("Message", ""))
     if msg_type == "ERR":
-        return f"Subsys={row.get('Subsys')} ECode={row.get('ECode')}"
+        return decode_error(row.get("Subsys"), row.get("ECode"))
     if msg_type == "EV":
-        return f"Event Id={row.get('Id')}"
+        return decode_event(row.get("Id"))
     if msg_type == "MODE":
         return f"Mode change -> {row.get('Mode', row.get('ModeNum'))}"
     return ", ".join(f"{k}={v}" for k, v in row.items() if k not in ("type", "timestamp"))

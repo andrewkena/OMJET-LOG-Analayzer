@@ -4,14 +4,22 @@ Each command id is decoded against the ArduPilot/MAVLink MAV_CMD enum so the
 purpose of every mission point is shown in plain text. The mission can also
 be exported as a standard ArduPilot/Mission Planner ".waypoints" file
 (QGC WPL 110 format).
+
+The tab is split into a small map on the left (showing the mission route)
+and the points table on the right; hovering a row highlights the matching
+marker on the map and vice versa.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QFileDialog, QMessageBox
+    QAbstractItemView, QFileDialog, QMessageBox, QSplitter
 )
 from pymavlink import mavutil
 
@@ -19,9 +27,80 @@ from app.core.log_loader import LogData
 
 _LAT_FIELDS = ["Lat", "lat", "x"]
 _LON_FIELDS = ["Lng", "Lon", "lon", "y"]
-_COLUMNS = ["Seq", "Cmd ID", "Command", "Description", "Lat", "Lng", "Alt", "Frame", "Params"]
+_COLUMNS = ["Command", "Lat", "Lng", "Alt", "Frame", "Params", "Seq", "Cmd ID", "Description"]
 
 _MAV_CMD = mavutil.mavlink.enums.get("MAV_CMD", {})
+
+_CMD_DESCRIPTIONS_RU = {
+    "NAV_WAYPOINT": "Лететь к путевой точке.",
+    "NAV_LOITER_UNLIM": "Кружить в точке неограниченное время.",
+    "NAV_LOITER_TURNS": "Кружить в точке заданное число витков.",
+    "NAV_LOITER_TIME": "Кружить в точке заданное время.",
+    "NAV_RETURN_TO_LAUNCH": "Вернуться на точку старта (RTL).",
+    "NAV_LAND": "Посадка в указанной точке.",
+    "NAV_TAKEOFF": "Взлёт с текущей позиции.",
+    "NAV_LAND_LOCAL": "Посадка в локальных координатах.",
+    "NAV_TAKEOFF_LOCAL": "Взлёт в локальных координатах.",
+    "NAV_FOLLOW": "Следовать за целью.",
+    "NAV_CONTINUE_AND_CHANGE_ALT": "Продолжить полёт с изменением высоты.",
+    "NAV_LOITER_TO_ALT": "Кружить в точке до набора заданной высоты.",
+    "DO_FOLLOW": "Следовать за другим аппаратом.",
+    "DO_FOLLOW_REPOSITION": "Изменить смещение при следовании.",
+    "NAV_ROI": "Удерживать точку интереса (ROI).",
+    "NAV_PATHPLANNING": "Построение маршрута.",
+    "NAV_SPLINE_WAYPOINT": "Лететь к путевой точке по сплайну.",
+    "NAV_VTOL_TAKEOFF": "Взлёт VTOL с переходом в самолётный режим.",
+    "NAV_VTOL_LAND": "Посадка в режиме VTOL.",
+    "NAV_GUIDED_ENABLE": "Включить управляемый режим (Guided).",
+    "NAV_DELAY": "Задержка перед продолжением миссии.",
+    "NAV_PAYLOAD_PLACE": "Доставить груз в указанной точке.",
+    "NAV_LAST": "Последняя команда навигации (маркер).",
+    "DO_LAND_START": "Маркер начала последовательности посадки.",
+    "DO_JUMP": "Перейти к другому пункту миссии.",
+    "DO_CHANGE_SPEED": "Изменить скорость полёта.",
+    "DO_SET_HOME": "Установить точку дома.",
+    "DO_SET_PARAMETER": "Установить значение параметра.",
+    "DO_SET_RELAY": "Установить состояние реле.",
+    "DO_REPEAT_RELAY": "Циклически переключать реле.",
+    "DO_SET_SERVO": "Установить положение сервопривода.",
+    "DO_REPEAT_SERVO": "Циклически двигать сервопривод.",
+    "DO_FLIGHTTERMINATION": "Аварийное завершение полёта.",
+    "DO_CHANGE_ALTITUDE": "Изменить высоту полёта.",
+    "DO_SET_ACTUATOR": "Установить значение актуатора.",
+    "DO_RETURN_PATH_START": "Маркер начала обратного маршрута.",
+    "DO_GO_AROUND": "Прервать посадку, уйти на второй круг.",
+    "DO_REPOSITION": "Перелететь в новую позицию.",
+    "DO_PAUSE_CONTINUE": "Приостановить/продолжить миссию.",
+    "DO_SET_REVERSE": "Включить/выключить реверс.",
+    "DO_SET_ROI_LOCATION": "Указать точку интереса по координатам.",
+    "DO_SET_ROI_WPNEXT_OFFSET": "Указать точку интереса со смещением от следующей точки.",
+    "DO_SET_ROI_NONE": "Отключить точку интереса.",
+    "DO_SET_ROI_SYSID": "Указать точку интереса по ID системы.",
+    "DO_CONTROL_VIDEO": "Управление видеозаписью.",
+    "DO_SET_ROI": "Установить точку интереса.",
+    "DO_DIGICAM_CONFIGURE": "Настроить параметры фотокамеры.",
+    "DO_DIGICAM_CONTROL": "Управление фотокамерой (спуск затвора).",
+    "DO_MOUNT_CONFIGURE": "Настроить подвес камеры.",
+    "DO_MOUNT_CONTROL": "Управление подвесом камеры.",
+    "DO_SET_CAM_TRIGG_DIST": "Установить дистанцию между фотографиями.",
+    "DO_FENCE_ENABLE": "Включить/выключить геозону (Fence).",
+    "DO_PARACHUTE": "Управление парашютом.",
+    "DO_MOTOR_TEST": "Тест мотора.",
+    "DO_INVERTED_FLIGHT": "Включить/выключить полёт вверх ногами.",
+    "DO_GRIPPER": "Управление захватом (Gripper).",
+    "DO_AUTOTUNE_ENABLE": "Включить/выключить автонастройку.",
+    "DO_VTOL_TRANSITION": "Переход VTOL между режимами полёта.",
+    "DO_ENGINE_CONTROL": "Управление двигателем.",
+    "DO_SET_MISSION_CURRENT": "Установить текущий пункт миссии.",
+    "DO_LAST": "Маркер конца команд DO.",
+    "DO_WINCH": "Управление лебёдкой.",
+    "DO_AUX_FUNCTION": "Выполнить вспомогательную функцию.",
+    "CONDITION_DELAY": "Условие: задержка по времени.",
+    "CONDITION_CHANGE_ALT": "Условие: изменение высоты.",
+    "CONDITION_DISTANCE": "Условие: дистанция до точки.",
+    "CONDITION_YAW": "Условие: целевой курс (yaw).",
+    "CONDITION_LAST": "Маркер конца условных команд.",
+}
 
 
 def _first_present(row: dict, names: list[str], default=None):
@@ -37,8 +116,127 @@ def describe_command(cmd_id) -> tuple[str, str]:
     except (KeyError, ValueError, TypeError):
         return "Unknown", ""
     name = entry.name.replace("MAV_CMD_", "")
-    description = (entry.description or "").split("\n")[0].strip()
+    description = _CMD_DESCRIPTIONS_RU.get(name)
+    if description is None:
+        description = (entry.description or "").split("\n")[0].strip()
     return name, description
+
+
+class _MissionMapBridge(QObject):
+    """JavaScript bridge to receive marker hover events from the mini map."""
+    marker_hovered = Signal(int)
+
+    @Slot(int)
+    def onMarkerHovered(self, index: int):
+        self.marker_hovered.emit(index)
+
+
+_MISSION_MAP_HTML = """<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+html,body,#map{height:100%;margin:0;padding:0;background:#222;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = L.map('map', {zoomSnap: 0, attributionControl: false}).setView([0, 0], 2);
+L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+    maxZoom: 21
+}).addTo(map);
+
+var missionLine = L.polyline([], {color: '#00e5ff', weight: 2, dashArray: '6,6'}).addTo(map);
+var markers = [];
+var highlightedIndex = -1;
+
+var pybridge = null;
+if (typeof QWebChannel !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+        pybridge = channel.objects.pybridge;
+    });
+}
+function notifyHover(idx) {
+    if (pybridge) pybridge.onMarkerHovered(idx);
+}
+
+function setMission(coords) {
+    missionLine.setLatLngs(coords);
+    markers.forEach(function(m) { m.remove(); });
+    markers = [];
+    highlightedIndex = -1;
+    coords.forEach(function(c, i) {
+        var m = L.circleMarker(c, {radius: 6, color: '#00e5ff', weight: 2, fillColor: '#003344', fillOpacity: 1})
+            .bindTooltip('WP ' + i)
+            .addTo(map);
+        m.on('mouseover', function() { notifyHover(i); });
+        m.on('mouseout', function() { notifyHover(-1); });
+        markers.push(m);
+    });
+    if (coords.length > 0) {
+        map.fitBounds(missionLine.getBounds(), {padding: [30, 30]});
+    }
+}
+
+function highlightPoint(idx) {
+    if (highlightedIndex >= 0 && highlightedIndex < markers.length) {
+        markers[highlightedIndex].setStyle({radius: 6, color: '#00e5ff', fillColor: '#003344'});
+    }
+    highlightedIndex = idx;
+    if (idx >= 0 && idx < markers.length) {
+        markers[idx].setStyle({radius: 10, color: '#ffeb3b', fillColor: '#ffeb3b'});
+        markers[idx].bringToFront();
+    }
+}
+</script>
+</body></html>
+"""
+
+
+class _MissionMapWidget(QWidget):
+    marker_hovered = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view = QWebEngineView()
+        self._ready = False
+        self._pending_js: list[str] = []
+
+        self._bridge = _MissionMapBridge()
+        self._bridge.marker_hovered.connect(self.marker_hovered)
+
+        channel = QWebChannel(self.view.page())
+        channel.registerObject("pybridge", self._bridge)
+        self.view.page().setWebChannel(channel)
+
+        self.view.loadFinished.connect(self._on_load_finished)
+        self.view.setHtml(_MISSION_MAP_HTML, QUrl("https://maps.google.com/"))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.view)
+
+    def _on_load_finished(self, ok: bool):
+        self._ready = ok
+        for script in self._pending_js:
+            self.view.page().runJavaScript(script)
+        self._pending_js.clear()
+
+    def _run_js(self, script: str):
+        if self._ready:
+            self.view.page().runJavaScript(script)
+        else:
+            self._pending_js.append(script)
+
+    def set_mission(self, coords: list[tuple[float, float]]):
+        self._run_js(f"setMission({json.dumps(coords)});")
+
+    def highlight_point(self, index: int):
+        self._run_js(f"highlightPoint({index});")
 
 
 class MissionWidget(QWidget):
@@ -46,9 +244,15 @@ class MissionWidget(QWidget):
         super().__init__(parent)
         self._waypoints: list[tuple[float, float]] = []
         self._export_rows: list[dict] = []
+        self._row_to_marker: dict[int, int] = {}
+        self._marker_to_row: dict[int, int] = {}
+        self._highlighted_row = -1
 
         self.download_button = QPushButton("Download Mission (.waypoints)")
         self.download_button.clicked.connect(self._on_download_clicked)
+
+        self.map = _MissionMapWidget()
+        self.map.marker_hovered.connect(self._on_marker_hovered)
 
         self.table = QTableWidget()
         self.table.setColumnCount(len(_COLUMNS))
@@ -56,16 +260,33 @@ class MissionWidget(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setWordWrap(True)
+        self.table.setMouseTracking(True)
+        self.table.viewport().setMouseTracking(True)
+        self.table.cellEntered.connect(self._on_table_cell_entered)
+        self.table.viewport().installEventFilter(self)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.map)
+        splitter.addWidget(self.table)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.download_button)
-        layout.addWidget(self.table)
+        layout.addWidget(splitter)
+
+    def eventFilter(self, watched, event):
+        if watched is self.table.viewport() and event.type() == event.Type.Leave:
+            self._clear_table_highlight()
+        return super().eventFilter(watched, event)
 
     def load(self, log_data: LogData):
         rows = log_data.mission()
         self.table.setRowCount(len(rows))
         self._waypoints = []
         self._export_rows = []
+        self._row_to_marker = {}
+        self._marker_to_row = {}
 
         for i, row in enumerate(rows):
             seq = row.get("CNum", row.get("seq", i))
@@ -81,6 +302,9 @@ class MissionWidget(QWidget):
                 lat_deg = lat / 1e7 if abs(lat) > 1000 else lat
                 lon_deg = lon / 1e7 if abs(lon) > 1000 else lon
                 if lat_deg != 0 or lon_deg != 0:
+                    marker_idx = len(self._waypoints)
+                    self._row_to_marker[i] = marker_idx
+                    self._marker_to_row[marker_idx] = i
                     self._waypoints.append((lat_deg, lon_deg))
 
             p1 = _first_present(row, ["Prm1", "param1"], 0.0)
@@ -101,17 +325,38 @@ class MissionWidget(QWidget):
                 if k.startswith("Prm") or k.startswith("param")
             )
 
-            self.table.setItem(i, 0, QTableWidgetItem(str(seq)))
-            self.table.setItem(i, 1, QTableWidgetItem(str(int(cmd_id)) if cmd_id != "" else ""))
-            self.table.setItem(i, 2, QTableWidgetItem(name))
-            self.table.setItem(i, 3, QTableWidgetItem(description))
-            self.table.setItem(i, 4, QTableWidgetItem(f"{lat_deg:.6f}"))
-            self.table.setItem(i, 5, QTableWidgetItem(f"{lon_deg:.6f}"))
-            self.table.setItem(i, 6, QTableWidgetItem(f"{alt:g}" if isinstance(alt, float) else str(alt)))
-            self.table.setItem(i, 7, QTableWidgetItem(str(frame)))
-            self.table.setItem(i, 8, QTableWidgetItem(params))
+            self.table.setItem(i, 0, QTableWidgetItem(name))
+            self.table.setItem(i, 1, QTableWidgetItem(f"{lat_deg:.6f}"))
+            self.table.setItem(i, 2, QTableWidgetItem(f"{lon_deg:.6f}"))
+            self.table.setItem(i, 3, QTableWidgetItem(f"{alt:g}" if isinstance(alt, float) else str(alt)))
+            self.table.setItem(i, 4, QTableWidgetItem(str(frame)))
+            self.table.setItem(i, 5, QTableWidgetItem(params))
+            self.table.setItem(i, 6, QTableWidgetItem(str(seq)))
+            self.table.setItem(i, 7, QTableWidgetItem(str(int(cmd_id)) if cmd_id != "" else ""))
+            self.table.setItem(i, 8, QTableWidgetItem(description))
 
         self.table.resizeColumnsToContents()
+        self.map.set_mission(self._waypoints)
+
+    def _on_table_cell_entered(self, row: int, column: int):
+        if row == self._highlighted_row:
+            return
+        self._highlighted_row = row
+        self.map.highlight_point(self._row_to_marker.get(row, -1))
+
+    def _clear_table_highlight(self):
+        if self._highlighted_row == -1:
+            return
+        self._highlighted_row = -1
+        self.map.highlight_point(-1)
+
+    def _on_marker_hovered(self, marker_idx: int):
+        row = self._marker_to_row.get(marker_idx, -1) if marker_idx >= 0 else -1
+        if row == -1:
+            self.table.clearSelection()
+        else:
+            self.table.selectRow(row)
+            self.table.scrollToItem(self.table.item(row, 0))
 
     def waypoints(self) -> list[tuple[float, float]]:
         return self._waypoints
