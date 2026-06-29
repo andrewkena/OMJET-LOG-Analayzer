@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QFormLayout, QLab
 
 from app.core.log_loader import LogData
 from app.core.time_format import format_mmss, format_gps_time
+from app.ui.battery_widget import BatteryWidget
 
 # Same candidate lists used elsewhere in the app (main_window.py) for
 # resolving fields across different log dialects/firmware versions.
@@ -92,12 +93,11 @@ class MissionAnalysisWidget(QWidget):
         misc_group = QGroupBox("Прочее")
         misc_layout = QFormLayout(misc_group)
         self.photo_count_label = QLabel("—")
-        self.bat1_mah_label = QLabel("—")
-        self.bat2_mah_label = QLabel("—")
         misc_layout.addRow("Количество фотографий:", self.photo_count_label)
-        misc_layout.addRow("Потрачено мА·ч (батарея 1):", self.bat1_mah_label)
-        misc_layout.addRow("Потрачено мА·ч (батарея 2):", self.bat2_mah_label)
         layout.addWidget(misc_group)
+
+        self.battery_widget = BatteryWidget()
+        layout.addWidget(self.battery_widget)
 
         layout.addStretch()
 
@@ -126,9 +126,7 @@ class MissionAnalysisWidget(QWidget):
 
         self.photo_count_label.setText(str(self._photo_count(log_data)))
 
-        bat1_mah, bat2_mah = self._battery_mah(log_data)
-        self.bat1_mah_label.setText(f"{bat1_mah:.0f} мА·ч" if bat1_mah is not None else "—")
-        self.bat2_mah_label.setText(f"{bat2_mah:.0f} мА·ч" if bat2_mah is not None else "—")
+        self.battery_widget.load(log_data)
 
     def _mission_bounds(self, log_data: LogData) -> tuple[float, float]:
         ev_table = log_data.messages.get("EV")
@@ -209,34 +207,3 @@ class MissionAnalysisWidget(QWidget):
     def _photo_count(self, log_data: LogData) -> int:
         cam_table = log_data.messages.get("CAM")
         return len(cam_table["timestamp"]) if cam_table else 0
-
-    def _battery_mah(self, log_data: LogData) -> tuple[float | None, float | None]:
-        bat_table = log_data.messages.get("BAT")
-        bat2_table = log_data.messages.get("BAT2")
-
-        def mah_for(table, instance) -> float | None:
-            if not table:
-                return None
-            if "Instance" in table:
-                mask = table["Instance"] == float(instance)
-                if not np.any(mask):
-                    return None
-                sub = {k: v[mask] for k, v in table.items()}
-            elif instance == 0:
-                sub = table
-            else:
-                return None
-            if "CurrTot" in sub and len(sub["CurrTot"]):
-                return float(sub["CurrTot"][-1])
-            if "Curr" in sub and len(sub["Curr"]) > 1:
-                t = sub["timestamp"]
-                curr = sub["Curr"]
-                dt_hours = np.diff(t) / 3600.0
-                return float(np.sum(curr[:-1] * dt_hours) * 1000.0)
-            return None
-
-        bat1 = mah_for(bat_table, 0)
-        bat2 = mah_for(bat_table, 1)
-        if bat2 is None:
-            bat2 = mah_for(bat2_table, 0)
-        return bat1, bat2

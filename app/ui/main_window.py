@@ -346,6 +346,9 @@ class MainWindow(QMainWindow):
             f"duration {self.log_data.end_time - self.log_data.start_time:.1f}s"
         )
 
+        if self.settings_widget.is_sound_alerts_enabled():
+            QApplication.beep()
+
     def _load_gps_track(self):
         if self.log_data is None:
             return

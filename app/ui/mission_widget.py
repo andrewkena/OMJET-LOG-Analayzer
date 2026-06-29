@@ -15,11 +15,12 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QFileDialog, QMessageBox, QSplitter
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
+    QAbstractItemView, QFileDialog, QMessageBox, QSplitter, QCheckBox
 )
 from pymavlink import mavutil
 
@@ -103,6 +104,15 @@ _CMD_DESCRIPTIONS_RU = {
 }
 
 
+_ROW_HIGHLIGHT_COLORS = {
+    "NAV_VTOL_TAKEOFF": (QColor("#1f7a1f"), QColor("#ffffff")),
+    "NAV_VTOL_LAND": (QColor("#1f7a1f"), QColor("#ffffff")),
+    "DO_SET_CAM_TRIGG_DIST": (QColor("#7a7a1f"), QColor("#ffffff")),
+    "DO_LAND_START": (QColor("#7a1f1f"), QColor("#ffffff")),
+    "NAV_LOITER_TO_ALT": (QColor("#b35900"), QColor("#ffffff")),
+}
+
+
 def _first_present(row: dict, names: list[str], default=None):
     for n in names:
         if n in row:
@@ -153,6 +163,7 @@ L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
 var missionLine = L.polyline([], {color: '#00e5ff', weight: 2, dashArray: '6,6'}).addTo(map);
 var markers = [];
 var highlightedIndex = -1;
+var followEnabled = false;
 
 var pybridge = null;
 if (typeof QWebChannel !== 'undefined') {
@@ -182,6 +193,16 @@ function setMission(coords) {
     }
 }
 
+function fitAll() {
+    if (markers.length > 0) {
+        map.fitBounds(missionLine.getBounds(), {padding: [30, 30]});
+    }
+}
+
+function setFollow(enabled) {
+    followEnabled = enabled;
+}
+
 function highlightPoint(idx) {
     if (highlightedIndex >= 0 && highlightedIndex < markers.length) {
         markers[highlightedIndex].setStyle({radius: 6, color: '#00e5ff', fillColor: '#003344'});
@@ -190,6 +211,9 @@ function highlightPoint(idx) {
     if (idx >= 0 && idx < markers.length) {
         markers[idx].setStyle({radius: 10, color: '#ffeb3b', fillColor: '#ffeb3b'});
         markers[idx].bringToFront();
+        if (followEnabled) {
+            map.panTo(markers[idx].getLatLng(), {animate: true});
+        }
     }
 }
 </script>
@@ -216,9 +240,23 @@ class _MissionMapWidget(QWidget):
         self.view.loadFinished.connect(self._on_load_finished)
         self.view.setHtml(_MISSION_MAP_HTML, QUrl("https://maps.google.com/"))
 
+        self.center_checkbox = QCheckBox("Центрировать")
+        self.center_checkbox.toggled.connect(self.set_follow)
+        self.center_checkbox.setChecked(True)
+
+        self.fit_checkbox = QCheckBox("Показать весь трек")
+        self.fit_checkbox.setChecked(True)
+        self.fit_checkbox.toggled.connect(self._on_fit_toggled)
+
+        controls = QHBoxLayout()
+        controls.addWidget(self.center_checkbox)
+        controls.addWidget(self.fit_checkbox)
+        controls.addStretch()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
+        layout.addLayout(controls)
 
     def _on_load_finished(self, ok: bool):
         self._ready = ok
@@ -234,9 +272,18 @@ class _MissionMapWidget(QWidget):
 
     def set_mission(self, coords: list[tuple[float, float]]):
         self._run_js(f"setMission({json.dumps(coords)});")
+        if self.fit_checkbox.isChecked():
+            self._run_js("fitAll();")
 
     def highlight_point(self, index: int):
         self._run_js(f"highlightPoint({index});")
+
+    def set_follow(self, enabled: bool):
+        self._run_js(f"setFollow({'true' if enabled else 'false'});")
+
+    def _on_fit_toggled(self, checked: bool):
+        if checked:
+            self._run_js("fitAll();")
 
 
 class MissionWidget(QWidget):
@@ -287,6 +334,8 @@ class MissionWidget(QWidget):
         self._export_rows = []
         self._row_to_marker = {}
         self._marker_to_row = {}
+        default_bg = self.table.palette().color(QPalette.Base)
+        default_fg = self.table.palette().color(QPalette.Text)
 
         for i, row in enumerate(rows):
             seq = row.get("CNum", row.get("seq", i))
@@ -325,15 +374,22 @@ class MissionWidget(QWidget):
                 if k.startswith("Prm") or k.startswith("param")
             )
 
-            self.table.setItem(i, 0, QTableWidgetItem(name))
-            self.table.setItem(i, 1, QTableWidgetItem(f"{lat_deg:.6f}"))
-            self.table.setItem(i, 2, QTableWidgetItem(f"{lon_deg:.6f}"))
-            self.table.setItem(i, 3, QTableWidgetItem(f"{alt:g}" if isinstance(alt, float) else str(alt)))
-            self.table.setItem(i, 4, QTableWidgetItem(str(frame)))
-            self.table.setItem(i, 5, QTableWidgetItem(params))
-            self.table.setItem(i, 6, QTableWidgetItem(str(seq)))
-            self.table.setItem(i, 7, QTableWidgetItem(str(int(cmd_id)) if cmd_id != "" else ""))
-            self.table.setItem(i, 8, QTableWidgetItem(description))
+            items = [
+                QTableWidgetItem(name),
+                QTableWidgetItem(f"{lat_deg:.6f}"),
+                QTableWidgetItem(f"{lon_deg:.6f}"),
+                QTableWidgetItem(f"{alt:g}" if isinstance(alt, float) else str(alt)),
+                QTableWidgetItem(str(frame)),
+                QTableWidgetItem(params),
+                QTableWidgetItem(str(seq)),
+                QTableWidgetItem(str(int(cmd_id)) if cmd_id != "" else ""),
+                QTableWidgetItem(description),
+            ]
+            bg, fg = _ROW_HIGHLIGHT_COLORS.get(name, (default_bg, default_fg))
+            for col, item in enumerate(items):
+                item.setBackground(bg)
+                item.setForeground(fg)
+                self.table.setItem(i, col, item)
 
         self.table.resizeColumnsToContents()
         self.map.set_mission(self._waypoints)

@@ -64,6 +64,14 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(theme_group)
 
+        # Notifications
+        notifications_group = QGroupBox("Уведомления")
+        notifications_layout = QVBoxLayout(notifications_group)
+        self.sound_alerts_checkbox = QCheckBox("Звуковые оповещения")
+        self.sound_alerts_checkbox.setChecked(True)
+        notifications_layout.addWidget(self.sound_alerts_checkbox)
+        layout.addWidget(notifications_group)
+
         # Battery Configuration
         battery_group = QGroupBox("Battery Configuration")
         battery_layout = QFormLayout(battery_group)
@@ -260,3 +268,7 @@ class SettingsWidget(QWidget):
     def get_max_wind(self) -> float:
         """Return the max wind speed threshold (m/s) for map highlighting."""
         return float(self._max_wind)
+
+    def is_sound_alerts_enabled(self) -> bool:
+        """Return whether sound alerts (e.g. on log load finished) are enabled."""
+        return self.sound_alerts_checkbox.isChecked()
