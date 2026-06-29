@@ -60,7 +60,7 @@ class MotorServoPanel(QWidget):
         super().__init__(parent)
         self.setFixedHeight(260)
 
-        self.throttle_gauge = TapeGauge("", "%")
+        self.throttle_gauge = TapeGauge("", "%", bar_height=150)
         self.motor_gauges = {key: TapeGauge("", "%") for key in _MOTOR_KEYS}
         self.aileron_gauge = DeflectionGauge("")
         self.elevator_gauge = DeflectionGauge("")

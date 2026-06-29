@@ -251,14 +251,22 @@ class AttitudePanel(QWidget):
 
         self.horizon = AttitudeIndicator()
         self.compass = HeadingIndicator()
-        self.speed_gauge = TapeGauge("Воздушная\nскорость", "м/с", bold_title=True, extra_label=None, unit_inline=True)
-        self.alt_gauge = TapeGauge("Высота", "m", bold_title=True)
-        self.bat1_volt_gauge = BatteryGauge("Напряжение", "V")
-        self.bat1_curr_gauge = TapeGauge("Ток", "A", current_warning=True)
-        self.bat2_volt_gauge = BatteryGauge("Напряжение", "V")
-        self.bat2_curr_gauge = TapeGauge("Ток", "A", current_warning=True)
+        self.speed_gauge = TapeGauge("", "м/с", extra_label=None, unit_inline=True, bar_height=150)
+        self.alt_gauge = TapeGauge("", "m", bar_height=150)
+        self.bat1_volt_gauge = BatteryGauge("", "V", bar_height=150)
+        self.bat1_curr_gauge = TapeGauge("", "A", current_warning=True, bar_height=150)
+        self.bat2_volt_gauge = BatteryGauge("", "V", bar_height=150)
+        self.bat2_curr_gauge = TapeGauge("", "A", current_warning=True, bar_height=150)
 
-        speed_container = _column_container(260, [], self.speed_gauge)
+        _BOLD_STYLE = "font-weight: bold;"
+        speed_label = QLabel("Воздушная\nскорость")
+        speed_label.setAlignment(Qt.AlignHCenter)
+        speed_label.setStyleSheet(_BOLD_STYLE)
+        alt_label = QLabel("Высота")
+        alt_label.setAlignment(Qt.AlignHCenter)
+        alt_label.setStyleSheet(_BOLD_STYLE)
+
+        speed_container = _column_container(260, [speed_label], self.speed_gauge)
 
         self.roll_label = QLabel("Крен: --")
         self.pitch_label = QLabel("Тангаж: --")
@@ -286,20 +294,28 @@ class AttitudePanel(QWidget):
         compass_box.addWidget(self.wind_speed_label, alignment=Qt.AlignHCenter)
         compass_box.addStretch()
 
-        alt_container = _column_container(260, [], self.alt_gauge)
+        alt_container = _column_container(260, [alt_label], self.alt_gauge)
+
+        def _bat_column(gauge, label_text: str) -> QVBoxLayout:
+            label = QLabel(label_text)
+            label.setAlignment(Qt.AlignHCenter)
+            col = QVBoxLayout()
+            col.addWidget(label, alignment=Qt.AlignHCenter)
+            col.addWidget(gauge, alignment=Qt.AlignHCenter)
+            return col
 
         bat1_label = QLabel("Батарея 1")
         bat1_label.setStyleSheet("font-weight: bold;")
         bat1_row = QHBoxLayout()
-        bat1_row.addWidget(self.bat1_volt_gauge)
-        bat1_row.addWidget(self.bat1_curr_gauge)
+        bat1_row.addLayout(_bat_column(self.bat1_volt_gauge, "Напряжение"))
+        bat1_row.addLayout(_bat_column(self.bat1_curr_gauge, "Ток"))
         self.bat1_container = _column_container(260, [bat1_label], bat1_row)
 
         bat2_label = QLabel("Батарея 2")
         bat2_label.setStyleSheet("font-weight: bold;")
         bat2_row = QHBoxLayout()
-        bat2_row.addWidget(self.bat2_volt_gauge)
-        bat2_row.addWidget(self.bat2_curr_gauge)
+        bat2_row.addLayout(_bat_column(self.bat2_volt_gauge, "Напряжение"))
+        bat2_row.addLayout(_bat_column(self.bat2_curr_gauge, "Ток"))
         self.bat2_container = _column_container(260, [bat2_label], bat2_row)
 
         separator = QFrame()

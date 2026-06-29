@@ -14,7 +14,7 @@ class TapeGauge(QWidget):
     _RED = (230, 25, 75)
 
     def __init__(self, title: str, unit: str, current_warning: bool = False, bold_title: bool = False,
-                 extra_label: str | None = "PWM", unit_inline: bool = False, parent=None):
+                 extra_label: str | None = "PWM", unit_inline: bool = False, bar_height: int = 100, parent=None):
         super().__init__(parent)
         self.title = title
         self.unit = unit
@@ -22,7 +22,8 @@ class TapeGauge(QWidget):
         self._extra_label = extra_label
         self._unit_inline = unit_inline
         self._title_offset = 14 * title.count("\n")
-        self.setFixedSize(70, 170 + self._title_offset)
+        self._bar_height = bar_height
+        self.setFixedSize(70, 170 + self._title_offset + (bar_height - 100))
         self._value = 0.0
         self._min = 0.0
         self._max = 1.0
@@ -109,7 +110,7 @@ class TapeGauge(QWidget):
         else:
             painter.drawText(QRectF(0, 0, rect.width(), title_rect_height), Qt.AlignCenter, self.title)
 
-        bar_rect = QRectF(rect.width() / 2 - 10, 15 + self._title_offset, 20, 100)
+        bar_rect = QRectF(rect.width() / 2 - 10, 15 + self._title_offset, 20, self._bar_height)
         painter.setPen(QPen(QColor("#888888"), 1))
         painter.setBrush(QColor(25, 25, 25))
         painter.drawRect(bar_rect)
@@ -125,7 +126,7 @@ class TapeGauge(QWidget):
         painter.drawRect(fill_rect)
 
         painter.setPen(QColor("white"))
-        value_y = 120 + self._title_offset
+        value_y = 15 + self._title_offset + self._bar_height + 5
         if self.unit == "%":
             painter.drawText(QRectF(0, value_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}{self.unit}")
         elif self._unit_inline:
@@ -142,9 +143,10 @@ class TapeGauge(QWidget):
 class BatteryGauge(QWidget):
     """Vertical battery gauge with color gradient based on voltage per cell."""
 
-    def __init__(self, title: str, unit: str, cell_count: int = 4, parent=None):
+    def __init__(self, title: str, unit: str, cell_count: int = 4, bar_height: int = 50, parent=None):
         super().__init__(parent)
-        self.setFixedSize(70, 120)
+        self._bar_height = bar_height
+        self.setFixedSize(70, 120 + (bar_height - 50))
         self.title = title
         self.unit = unit
         self._value = 0.0
@@ -216,7 +218,7 @@ class BatteryGauge(QWidget):
         painter.setPen(QColor("white"))
         painter.drawText(QRectF(0, 0, rect.width(), 14), Qt.AlignCenter, self.title)
 
-        bar_rect = QRectF(rect.width() / 2 - 10, 15, 20, 50)
+        bar_rect = QRectF(rect.width() / 2 - 10, 15, 20, self._bar_height)
         painter.setPen(QPen(QColor("#888888"), 1))
         painter.setBrush(QColor(25, 25, 25))
         painter.drawRect(bar_rect)
@@ -241,9 +243,10 @@ class BatteryGauge(QWidget):
         # Draw voltage per cell indicator
         voltage_per_cell = self._value / max(1, self._cell_count)
 
+        text_y = 15 + self._bar_height + 5
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, 70, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}")
-        painter.drawText(QRectF(0, 86, rect.width(), 14), Qt.AlignCenter, f"{voltage_per_cell:.1f}V/c")
+        painter.drawText(QRectF(0, text_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}")
+        painter.drawText(QRectF(0, text_y + 16, rect.width(), 14), Qt.AlignCenter, f"{voltage_per_cell:.1f}V/c")
 
 
 class DeflectionGauge(QWidget):

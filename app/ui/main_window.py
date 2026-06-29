@@ -67,10 +67,10 @@ SERVO_FUNCTION_IDS = {
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("OMJET LOG Analyzer")
+        self.setWindowTitle("ОМДЖЕТ ЛОГ Анализатор")
         self.setWindowIcon(QIcon(str(_ASSETS_DIR / "logo.ico")))
-        self.resize(1950, 1200)
-        self.setMinimumWidth(1950)
+        self.resize(1920, 1080)
+        self.setMinimumWidth(1920)
 
         self.log_data: LogData | None = None
         self._worker: LogLoadWorker | None = None
@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
         playback_row = QHBoxLayout()
         playback_row.addStretch()
         playback_row.addWidget(self.map_widget.show_errors_checkbox)
+        playback_row.addWidget(self.map_widget.show_wind_checkbox)
         errors_separator = QFrame()
         errors_separator.setFrameShape(QFrame.VLine)
         errors_separator.setFrameShadow(QFrame.Sunken)

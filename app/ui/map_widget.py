@@ -379,6 +379,10 @@ class MapWidget(QWidget):
         self.show_errors_checkbox.toggled.connect(self.set_error_markers_visible)
         self.show_errors_checkbox.toggled.connect(self._on_show_errors_toggled)
 
+        self.show_wind_checkbox = QCheckBox("Ветер")
+        self.show_wind_checkbox.setChecked(True)
+        self.show_wind_checkbox.toggled.connect(self.set_wind_panel_visible)
+
         self._max_wind = 12.0
 
         layout = QVBoxLayout(self)
@@ -438,6 +442,7 @@ class MapWidget(QWidget):
         wind_panel_layout.addWidget(wind_title)
         wind_panel_layout.addWidget(self.wind_value_label)
         self.wind_panel.adjustSize()
+        self.wind_panel.setVisible(self.show_wind_checkbox.isChecked())
 
         self._t = np.array([])
         self._lat = np.array([])
@@ -480,6 +485,9 @@ class MapWidget(QWidget):
     def set_wind_speed_data(self, t: np.ndarray, speed: np.ndarray):
         self._wind_t, self._wind_speed = t, speed
         self._update_wind_highlight()
+
+    def set_wind_panel_visible(self, visible: bool):
+        self.wind_panel.setVisible(visible)
 
     def set_max_wind(self, max_wind: float):
         self._max_wind = max_wind
