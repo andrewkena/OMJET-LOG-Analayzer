@@ -252,11 +252,11 @@ class AttitudePanel(QWidget):
         self.horizon = AttitudeIndicator()
         self.compass = HeadingIndicator()
         self.speed_gauge = TapeGauge("", "м/с", extra_label=None, unit_inline=True, bar_height=150)
-        self.alt_gauge = TapeGauge("", "m", bar_height=150)
+        self.alt_gauge = TapeGauge("", "м", unit_inline=True, bar_height=150)
         self.bat1_volt_gauge = BatteryGauge("", "V", bar_height=150)
-        self.bat1_curr_gauge = TapeGauge("", "A", current_warning=True, bar_height=150)
+        self.bat1_curr_gauge = TapeGauge("", "A", current_warning=True, unit_inline=True, bar_height=150)
         self.bat2_volt_gauge = BatteryGauge("", "V", bar_height=150)
-        self.bat2_curr_gauge = TapeGauge("", "A", current_warning=True, bar_height=150)
+        self.bat2_curr_gauge = TapeGauge("", "A", current_warning=True, unit_inline=True, bar_height=150)
 
         _BOLD_STYLE = "font-weight: bold;"
         speed_label = QLabel("Воздушная\nскорость")
@@ -280,10 +280,11 @@ class AttitudePanel(QWidget):
         horizon_box.addWidget(self.pitch_label, alignment=Qt.AlignHCenter)
         horizon_box.addStretch()
 
-        self.heading_label = QLabel("Курс истинный: --")
+        self.heading_label = QLabel("Курс: --")
         self.bearing_label = QLabel("Курс на точку: --")
         self.wind_speed_label = QLabel("Скорость ветра: --")
-        for label in (self.heading_label, self.bearing_label, self.wind_speed_label):
+        self.wind_dir_label = QLabel("Направление ветра: --")
+        for label in (self.heading_label, self.bearing_label, self.wind_speed_label, self.wind_dir_label):
             label.setAlignment(Qt.AlignHCenter)
 
         compass_box = QVBoxLayout()
@@ -292,6 +293,7 @@ class AttitudePanel(QWidget):
         compass_box.addWidget(self.heading_label, alignment=Qt.AlignHCenter)
         compass_box.addWidget(self.bearing_label, alignment=Qt.AlignHCenter)
         compass_box.addWidget(self.wind_speed_label, alignment=Qt.AlignHCenter)
+        compass_box.addWidget(self.wind_dir_label, alignment=Qt.AlignHCenter)
         compass_box.addStretch()
 
         alt_container = _column_container(260, [alt_label], self.alt_gauge)
@@ -390,7 +392,7 @@ class AttitudePanel(QWidget):
         self.compass.set_heading(0.0)
         self.roll_label.setText("Крен: --")
         self.pitch_label.setText("Тангаж: --")
-        self.heading_label.setText("Курс истинный: --")
+        self.heading_label.setText("Курс: --")
         self.bearing_label.setText("Курс на точку: --")
         self.clear_wind_data()
 
@@ -459,11 +461,13 @@ class AttitudePanel(QWidget):
         if len(t):
             self.compass.set_wind_direction(float(direction_deg[0]))
             self.wind_speed_label.setText(f"Скорость ветра: {speed[0]:.1f} м/с")
+            self.wind_dir_label.setText(f"Направление ветра: {direction_deg[0]:.0f}°")
 
     def clear_wind_data(self):
         self._wind_t = np.array([])
         self.compass.set_wind_direction(None)
         self.wind_speed_label.setText("Скорость ветра: --")
+        self.wind_dir_label.setText("Направление ветра: --")
 
     def set_battery_data(self, index: int, t: np.ndarray, volt: np.ndarray, curr: np.ndarray):
         self._bat_t[index], self._bat_volt[index], self._bat_curr[index] = t, volt, curr
@@ -488,7 +492,7 @@ class AttitudePanel(QWidget):
             self.compass.set_heading(self._yaw[idx])
             self.roll_label.setText(f"Крен: {self._roll[idx]:.0f}°")
             self.pitch_label.setText(f"Тангаж: {self._pitch[idx]:.0f}°")
-            self.heading_label.setText(f"Курс истинный: {self._yaw[idx]:.0f}°")
+            self.heading_label.setText(f"Курс: {self._yaw[idx]:.0f}°")
         if len(self._pos_t):
             idx = int(np.searchsorted(self._pos_t, t))
             idx = max(0, min(idx, len(self._pos_t) - 1))
@@ -515,6 +519,7 @@ class AttitudePanel(QWidget):
             idx = max(0, min(idx, len(self._wind_t) - 1))
             self.compass.set_wind_direction(float(self._wind_dir[idx]))
             self.wind_speed_label.setText(f"Скорость ветра: {float(self._wind_speed[idx]):.1f} м/с")
+            self.wind_dir_label.setText(f"Направление ветра: {float(self._wind_dir[idx]):.0f}°")
         for index in (1, 2):
             bt = self._bat_t[index]
             if len(bt):

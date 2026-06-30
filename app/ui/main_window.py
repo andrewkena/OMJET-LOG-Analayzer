@@ -8,8 +8,9 @@ from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QSplitter, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QMessageBox, QStatusBar, QProgressBar, QComboBox, QLabel, QPushButton, QFrame
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon
+from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtWidgets import QApplication
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
@@ -56,6 +57,20 @@ ALT_GAUGE_CANDIDATES = [
 ]
 # (msg_type, north_field, east_field) -> EKF-estimated wind velocity components, m/s
 WIND_CANDIDATES = [("XKF2", "VWN", "VWE"), ("NKF2", "VWN", "VWE")]
+# (msg_type, field) used by the "Baro vs GPS Altitude" graph preset
+BARO_GPS_ALT_CANDIDATES = [("BARO", "Alt"), ("GPS", "Alt")]
+
+
+def _battery_by_instance(table, instance: int):
+    """Splits a combined BAT table (multi-instance, distinguished by "Inst") into one battery's Volt/Curr series."""
+    if not table or "Volt" not in table or "Curr" not in table:
+        return None
+    if "Inst" in table:
+        mask = table["Inst"] == float(instance)
+        if not np.any(mask):
+            return None
+        return table["timestamp"][mask], table["Volt"][mask], table["Curr"][mask]
+    return (table["timestamp"], table["Volt"], table["Curr"]) if instance == 0 else None
 # ArduPilot SRV_Channel::Function ids for SERVOx_FUNCTION parameters
 SERVO_FUNCTION_IDS = {
     "Aileron": 4, "Elevator": 19, "Rudder": 21, "Throttle": 70,
@@ -83,6 +98,9 @@ class MainWindow(QMainWindow):
         self.playback_timer.setInterval(50)
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
+        self._load_done_sound = QSoundEffect(self)
+        self._load_done_sound.setSource(QUrl.fromLocalFile(str(_ASSETS_DIR / "done.wav")))
+
         self._build_layout()
         self._build_status_bar()
         self._connect_settings_signals()
@@ -103,6 +121,8 @@ class MainWindow(QMainWindow):
         self.settings_widget.current_thresholds_changed.connect(self.attitude_panel.set_current_thresholds)
         self.settings_widget.speed_thresholds_changed.connect(self.attitude_panel.set_speed_thresholds)
         self.settings_widget.max_wind_changed.connect(self.map_widget.set_max_wind)
+        self.settings_widget.efficiency_thresholds_changed.connect(self.mission_analysis_widget.set_efficiency_thresholds)
+        self.mission_analysis_widget.set_efficiency_thresholds(*self.settings_widget.get_efficiency_thresholds())
         self.settings_widget.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.settings_widget.current_theme())
         self.settings_widget.timezone_changed.connect(self._on_timezone_changed)
@@ -144,13 +164,13 @@ class MainWindow(QMainWindow):
         self.graphs[2].plot_widget.setXLink(self.graphs[0].plot_widget)
 
         self.target_graph_combo = QComboBox()
-        self.target_graph_combo.addItems([f"Graph {i + 1}" for i in range(len(self.graphs))])
+        self.target_graph_combo.addItems([f"График {i + 1}" for i in range(len(self.graphs))])
 
         graph_tab = QWidget()
         graph_tab_layout = QVBoxLayout(graph_tab)
         graph_tab_layout.setContentsMargins(4, 4, 4, 4)
         target_row = QHBoxLayout()
-        target_row.addWidget(QLabel(f"Add checked field to (max {MAX_CURVES} per graph):"))
+        target_row.addWidget(QLabel(f"Добавить параметр в поле графика (до {MAX_CURVES} параметров на один график):"))
         target_row.addWidget(self.target_graph_combo)
         target_row.addStretch()
         graph_tab_layout.addLayout(target_row)
@@ -159,7 +179,7 @@ class MainWindow(QMainWindow):
             wrapper = QWidget()
             wrapper_layout = QVBoxLayout(wrapper)
             wrapper_layout.setContentsMargins(0, 0, 0, 0)
-            wrapper_layout.addWidget(QLabel(f"Graph {i + 1}"))
+            wrapper_layout.addWidget(QLabel(f"График {i + 1}"))
             wrapper_layout.addWidget(graph)
             graph_splitter.addWidget(wrapper)
         graph_tab_layout.addWidget(graph_splitter)
@@ -223,6 +243,7 @@ class MainWindow(QMainWindow):
         photo_count_separator.setFrameShadow(QFrame.Sunken)
         playback_row.addWidget(photo_count_separator)
         playback_row.addWidget(self.map_widget.photo_count_label)
+        playback_row.addWidget(self.map_widget.photo_count_help_label)
         playback_row.addStretch()
 
         map_tab = QWidget()
@@ -243,12 +264,12 @@ class MainWindow(QMainWindow):
 
         right_tabs = QTabWidget()
         right_tabs.addTab(map_tab, "Карта")
-        right_tabs.addTab(self.mission_analysis_widget, "Анализ миссии")
         right_tabs.addTab(graph_tab, "Графики")
+        right_tabs.addTab(self.mission_analysis_widget, "Анализ миссии")
         right_tabs.addTab(self.events_widget, "События")
-        right_tabs.addTab(self.photo_geotag_widget, "Геотегирование фотографий")
         right_tabs.addTab(self.params_widget, "Параметры полетного контроллера")
         right_tabs.addTab(self.mission_widget, "Полетное задание")
+        right_tabs.addTab(self.photo_geotag_widget, "Геотегирование фотографий")
         right_tabs.addTab(self.settings_widget, "Настройки")
         right_tabs.setCurrentIndex(0)
 
@@ -348,7 +369,7 @@ class MainWindow(QMainWindow):
         )
 
         if self.settings_widget.is_sound_alerts_enabled():
-            QApplication.beep()
+            self._load_done_sound.play()
 
     def _load_gps_track(self):
         if self.log_data is None:
@@ -573,23 +594,13 @@ class MainWindow(QMainWindow):
         bat_table = self.log_data.messages.get("BAT")
         bat2_table = self.log_data.messages.get("BAT2")
 
-        def by_instance(table, instance):
-            if not table or "Volt" not in table or "Curr" not in table:
-                return None
-            if "Inst" in table:
-                mask = table["Inst"] == float(instance)
-                if not np.any(mask):
-                    return None
-                return table["timestamp"][mask], table["Volt"][mask], table["Curr"][mask]
-            return (table["timestamp"], table["Volt"], table["Curr"]) if instance == 0 else None
-
-        bat1 = by_instance(bat_table, 0)
+        bat1 = _battery_by_instance(bat_table, 0)
         if bat1 is not None:
             self.attitude_panel.set_battery_data(1, *bat1)
         else:
             self.attitude_panel.clear_battery_data(1)
 
-        bat2 = by_instance(bat_table, 1)
+        bat2 = _battery_by_instance(bat_table, 1)
         if bat2 is None and bat2_table and "Volt" in bat2_table and "Curr" in bat2_table:
             bat2 = (bat2_table["timestamp"], bat2_table["Volt"], bat2_table["Curr"])
         if bat2 is not None:
@@ -650,9 +661,9 @@ class MainWindow(QMainWindow):
                 self._field_graph_assignment[key] = idx
             else:
                 QMessageBox.warning(
-                    self, "Graph is full",
-                    f"Graph {idx + 1} already has the maximum of {MAX_CURVES} parameters. "
-                    f"Remove one first or pick another graph slot."
+                    self, "График заполнен",
+                    f"В графике {idx + 1} уже максимум параметров ({MAX_CURVES}). "
+                    f"Удалите один из них или выберите другой график."
                 )
                 self.message_tree.set_field_checked(msg_type, field_name, False)
         else:
@@ -670,6 +681,47 @@ class MainWindow(QMainWindow):
                     if table and field in table:
                         self.message_tree.set_field_checked(msg_type, field, True)
                         break
+        elif preset_id == "baro_vs_gps_altitude":
+            for msg_type, field in BARO_GPS_ALT_CANDIDATES:
+                table = self.log_data.messages.get(msg_type)
+                if table and field in table:
+                    self.message_tree.set_field_checked(msg_type, field, True)
+        elif preset_id == "battery1_vs_battery2":
+            self._apply_battery_preset()
+
+    def _apply_battery_preset(self):
+        bat_table = self.log_data.messages.get("BAT")
+        bat2_table = self.log_data.messages.get("BAT2")
+
+        bat1 = _battery_by_instance(bat_table, 0)
+        bat2 = _battery_by_instance(bat_table, 1)
+        if bat2 is None and bat2_table and "Volt" in bat2_table and "Curr" in bat2_table:
+            bat2 = (bat2_table["timestamp"], bat2_table["Volt"], bat2_table["Curr"])
+
+        curves = []
+        if bat1 is not None:
+            t, volt, curr = bat1
+            curves.append(("BAT1.Volt", t, volt, "Батарея 1: напряжение"))
+            curves.append(("BAT1.Curr", t, curr, "Батарея 1: ток"))
+        if bat2 is not None:
+            t, volt, curr = bat2
+            curves.append(("BAT2.Volt", t, volt, "Батарея 2: напряжение"))
+            curves.append(("BAT2.Curr", t, curr, "Батарея 2: ток"))
+        if not curves:
+            return
+
+        idx = self.target_graph_combo.currentIndex()
+        graph = self.graphs[idx]
+        for key, t, y, label in curves:
+            if graph.add_curve(key, t, y, label):
+                self._field_graph_assignment[key] = idx
+            else:
+                QMessageBox.warning(
+                    self, "График заполнен",
+                    f"В графике {idx + 1} уже максимум параметров ({MAX_CURVES}). "
+                    f"Удалите один из них или выберите другой график."
+                )
+                break
 
     def _on_cursor_moved(self, t: float):
         self._current_time = t

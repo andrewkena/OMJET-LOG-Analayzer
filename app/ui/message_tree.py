@@ -10,9 +10,10 @@ from __future__ import annotations
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QToolButton, QHeaderView,
+    QToolButton, QHeaderView, QMenu, QInputDialog,
 )
 
+from app.core import favorites_store
 from app.core.log_loader import LogData
 
 _STAR_ACTIVE_STYLE = "QToolButton { border: none; color: #ffd700; font-size: 14px; }"
@@ -21,6 +22,8 @@ _STAR_INACTIVE_STYLE = "QToolButton { border: none; color: #888; font-size: 14px
 
 _PRESETS = [
     ("airspeed_ground_speed", "AirSpeed - Ground Speed"),
+    ("battery1_vs_battery2", "Battery 1 - Battery 2"),
+    ("baro_vs_gps_altitude", "Baro - GPS Altitude"),
 ]
 
 
@@ -34,6 +37,8 @@ class MessageTree(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.favorites_tree = self._make_tree("Избранное")
+        self.favorites_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.favorites_tree.customContextMenuRequested.connect(self._on_favorites_context_menu)
         self.tree = self._make_tree("Параметры")
         self.presets_tree = self._make_presets_tree("Пресеты")
 
@@ -48,7 +53,8 @@ class MessageTree(QWidget):
 
         self._loading = False
         self._syncing = False
-        self._favorites: set[tuple[str, str]] = set()
+        self._favorites: set[tuple[str, str]] = favorites_store.load_favorites()
+        self._renames: dict[tuple[str, str], str] = favorites_store.load_renames()
         self._leaf_items: dict[tuple[str, str], list[QTreeWidgetItem]] = {}
         self._star_buttons: dict[tuple[str, str], list[QToolButton]] = {}
 
@@ -103,7 +109,8 @@ class MessageTree(QWidget):
 
     def _build_leaf(self, tree_widget: QTreeWidget, attach, key: tuple[str, str]) -> QTreeWidgetItem:
         msg_type, fname = key
-        item = QTreeWidgetItem([fname])
+        display_name = self._renames.get(key, fname) if tree_widget is self.favorites_tree else fname
+        item = QTreeWidgetItem([display_name])
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(0, Qt.Unchecked)
         item.setData(0, Qt.UserRole, key)
@@ -179,3 +186,55 @@ class MessageTree(QWidget):
                             btn.deleteLater()
                         items.remove(item)
                         self._star_buttons[key] = [b for b in self._star_buttons[key] if b is not btn]
+
+        favorites_store.save_favorites(self._favorites)
+
+    def _on_favorites_context_menu(self, pos):
+        item = self.favorites_tree.itemAt(pos)
+        if item is not None:
+            key = item.data(0, Qt.UserRole)
+            if key is None:
+                return
+            menu = QMenu(self)
+            rename_action = menu.addAction("Переименовать параметр")
+            rename_action.triggered.connect(lambda: self._rename_favorite(key))
+            if key in self._renames:
+                restore_action = menu.addAction("Вернуть оригинальное имя параметра")
+                restore_action.triggered.connect(lambda: self._restore_favorite_name(key))
+            menu.exec(self.favorites_tree.viewport().mapToGlobal(pos))
+            return
+
+        if not self._favorites:
+            return
+        menu = QMenu(self)
+        clear_action = menu.addAction("Очистить избранное")
+        clear_action.triggered.connect(self._clear_favorites)
+        menu.exec(self.favorites_tree.viewport().mapToGlobal(pos))
+
+    def _rename_favorite(self, key: tuple[str, str]):
+        msg_type, fname = key
+        current = self._renames.get(key, fname)
+        new_name, ok = QInputDialog.getText(
+            self, "Переименовать параметр", "Новое имя:", text=current
+        )
+        if ok and new_name.strip():
+            self._renames[key] = new_name.strip()
+            favorites_store.save_renames(self._renames)
+            self._refresh_favorite_label(key)
+
+    def _restore_favorite_name(self, key: tuple[str, str]):
+        if key in self._renames:
+            del self._renames[key]
+            favorites_store.save_renames(self._renames)
+            self._refresh_favorite_label(key)
+
+    def _refresh_favorite_label(self, key: tuple[str, str]):
+        msg_type, fname = key
+        display_name = self._renames.get(key, fname)
+        for item in self._leaf_items.get(key, []):
+            if item.treeWidget() is self.favorites_tree:
+                item.setText(0, display_name)
+
+    def _clear_favorites(self):
+        for key in list(self._favorites):
+            self._on_star_toggled(False, key)

@@ -245,8 +245,9 @@ class BatteryGauge(QWidget):
 
         text_y = 15 + self._bar_height + 5
         painter.setPen(QColor("white"))
-        painter.drawText(QRectF(0, text_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f}")
-        painter.drawText(QRectF(0, text_y + 16, rect.width(), 14), Qt.AlignCenter, f"{voltage_per_cell:.1f}V/c")
+        painter.drawText(QRectF(0, text_y, rect.width(), 16), Qt.AlignCenter, f"{self._value:.1f} В")
+        painter.drawText(QRectF(0, text_y + 16, rect.width(), 16), Qt.AlignCenter,
+                          f"{voltage_per_cell:.1f} В/я")
 
 
 class DeflectionGauge(QWidget):

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QComboBox, QCheckBox,
-    QSpinBox, QFormLayout, QListWidget, QListWidgetItem
+    QSpinBox, QFormLayout, QListWidget, QListWidgetItem, QPushButton, QMessageBox
 )
 from PySide6.QtCore import Signal
+
+from app.core import tile_cache
 
 
 class SettingsWidget(QWidget):
@@ -17,6 +19,7 @@ class SettingsWidget(QWidget):
     current_thresholds_changed = Signal(float, float)  # green, red
     speed_thresholds_changed = Signal(float, float, float)  # min, target, max
     max_wind_changed = Signal(float)  # max wind speed, m/s
+    efficiency_thresholds_changed = Signal(float, float, float)  # green, yellow, red (mAh)
     theme_changed = Signal(str)  # "light", "dark", or "system"
     timezone_changed = Signal(float)  # UTC offset in hours
     language_changed = Signal(str)  # "ru" or "en"
@@ -33,6 +36,9 @@ class SettingsWidget(QWidget):
         self._speed_target = 20
         self._speed_max = 24
         self._max_wind = 12
+        self._eff_green = 200
+        self._eff_yellow = 300
+        self._eff_red = 400
 
         layout = QVBoxLayout(self)
 
@@ -71,6 +77,17 @@ class SettingsWidget(QWidget):
         self.sound_alerts_checkbox.setChecked(True)
         notifications_layout.addWidget(self.sound_alerts_checkbox)
         layout.addWidget(notifications_group)
+
+        # Map tile cache
+        cache_group = QGroupBox("Кэш картографических данных")
+        cache_layout = QVBoxLayout(cache_group)
+        self.cache_size_label = QLabel()
+        self._update_cache_size_label()
+        cache_layout.addWidget(self.cache_size_label)
+        self.clear_cache_button = QPushButton("Очистить кэш картографических данных")
+        self.clear_cache_button.clicked.connect(self._on_clear_cache_clicked)
+        cache_layout.addWidget(self.clear_cache_button)
+        layout.addWidget(cache_group)
 
         # Battery Configuration
         battery_group = QGroupBox("Battery Configuration")
@@ -156,6 +173,38 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(color_group)
 
+        # Efficiency thresholds (mAh consumption coloring in Mission Analysis)
+        efficiency_group = QGroupBox("Пороги эффективности")
+        efficiency_layout = QFormLayout(efficiency_group)
+
+        eff_row = QHBoxLayout()
+        eff_row.addWidget(self._make_dot("#3cb44b"))
+        self.eff_green_spin = QSpinBox()
+        self.eff_green_spin.setRange(0, 5000)
+        self.eff_green_spin.setSuffix(" мА·ч")
+        self.eff_green_spin.setValue(self._eff_green)
+        self.eff_green_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
+        eff_row.addWidget(self.eff_green_spin)
+
+        eff_row.addWidget(self._make_dot("#f1c40f"))
+        self.eff_yellow_spin = QSpinBox()
+        self.eff_yellow_spin.setRange(0, 5000)
+        self.eff_yellow_spin.setSuffix(" мА·ч")
+        self.eff_yellow_spin.setValue(self._eff_yellow)
+        self.eff_yellow_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
+        eff_row.addWidget(self.eff_yellow_spin)
+
+        eff_row.addWidget(self._make_dot("#e6194b"))
+        self.eff_red_spin = QSpinBox()
+        self.eff_red_spin.setRange(0, 5000)
+        self.eff_red_spin.setSuffix(" мА·ч")
+        self.eff_red_spin.setValue(self._eff_red)
+        self.eff_red_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
+        eff_row.addWidget(self.eff_red_spin)
+
+        efficiency_layout.addRow("Расход (мА·ч):", eff_row)
+        layout.addWidget(efficiency_group)
+
         # Info section
         info_group = QGroupBox("Battery Voltage Info")
         info_layout = QVBoxLayout(info_group)
@@ -170,6 +219,14 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(info_group)
         layout.addStretch()
+
+    @staticmethod
+    def _make_dot(color: str) -> QLabel:
+        """Create a small colored circle label (used to mark threshold inputs)."""
+        dot = QLabel()
+        dot.setFixedSize(12, 12)
+        dot.setStyleSheet(f"background-color: {color}; border-radius: 6px;")
+        return dot
 
     def _on_theme_changed(self, index: int):
         """Handle theme selection change."""
@@ -260,6 +317,24 @@ class SettingsWidget(QWidget):
         """Return the (min, target, max) speed coloring thresholds."""
         return float(self._speed_min), float(self._speed_target), float(self._speed_max)
 
+    def _on_efficiency_thresholds_changed(self):
+        """Handle efficiency (mAh consumption) threshold change, keeping green <= yellow <= red."""
+        green_v = self.eff_green_spin.value()
+        yellow_v = self.eff_yellow_spin.value()
+        red_v = self.eff_red_spin.value()
+        if yellow_v < green_v:
+            self.eff_yellow_spin.setValue(green_v)
+            return  # setValue triggers this slot again with the corrected value
+        if red_v < yellow_v:
+            self.eff_red_spin.setValue(yellow_v)
+            return
+        self._eff_green, self._eff_yellow, self._eff_red = green_v, yellow_v, red_v
+        self.efficiency_thresholds_changed.emit(float(green_v), float(yellow_v), float(red_v))
+
+    def get_efficiency_thresholds(self) -> tuple[float, float, float]:
+        """Return the (green, yellow, red) efficiency (mAh consumption) thresholds."""
+        return float(self._eff_green), float(self._eff_yellow), float(self._eff_red)
+
     def _on_max_wind_changed(self, value: int):
         """Handle max wind threshold change."""
         self._max_wind = value
@@ -272,3 +347,19 @@ class SettingsWidget(QWidget):
     def is_sound_alerts_enabled(self) -> bool:
         """Return whether sound alerts (e.g. on log load finished) are enabled."""
         return self.sound_alerts_checkbox.isChecked()
+
+    def _update_cache_size_label(self):
+        """Refresh the displayed map tile cache size."""
+        size = tile_cache.get_cache_size_bytes()
+        self.cache_size_label.setText(f"Объём картографических данных: {tile_cache.format_size(size)}")
+
+    def _on_clear_cache_clicked(self):
+        """Handle the 'clear map cache' button click."""
+        tile_cache.clear_cache()
+        self._update_cache_size_label()
+        QMessageBox.information(self, "Кэш карты", "Кэш картографических данных очищен.")
+
+    def showEvent(self, event):
+        """Refresh the cache size display every time the Settings tab is shown."""
+        super().showEvent(event)
+        self._update_cache_size_label()

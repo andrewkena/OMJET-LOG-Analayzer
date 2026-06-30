@@ -155,8 +155,7 @@ html,body,#map{height:100%;margin:0;padding:0;background:#222;}
 <div id="map"></div>
 <script>
 var map = L.map('map', {zoomSnap: 0, attributionControl: false}).setView([0, 0], 2);
-L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
-    subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+L.tileLayer('tilecache://tile/s/{z}/{x}/{y}', {
     maxZoom: 21
 }).addTo(map);
 

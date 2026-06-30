@@ -109,7 +109,7 @@ class MotorServoPanel(QWidget):
         surface_gauges = {"Aileron": self.aileron_gauge, "Elevator": self.elevator_gauge, "Rudder": self.rudder_gauge}
         for key in _SURFACE_KEYS:
             surface_label = QLabel(_SURFACE_LABELS[key])
-            surface_label.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            surface_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
             surface_label.setFixedHeight(32)
             surface_col = QVBoxLayout()
             surface_col.addWidget(surface_label, alignment=Qt.AlignHCenter)

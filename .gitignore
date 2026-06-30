@@ -18,6 +18,13 @@ dist/
 # Installer build artifacts
 installer_output/
 
+# Cached map tile imagery (downloaded at runtime, kept for offline use)
+map_cache/
+
+# Persisted user state
+favorites.json
+renames.json
+
 # IDE
 .idea/
 .vscode/

@@ -58,8 +58,7 @@ var map = L.map('map', {
     attributionControl: false
 }).setView([0, 0], 2);
 function googleLayer(lyrs, maxZoom) {
-    return L.tileLayer('https://{s}.google.com/vt/lyrs=' + lyrs + '&x={x}&y={y}&z={z}', {
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+    return L.tileLayer('tilecache://tile/' + lyrs + '/{z}/{x}/{y}', {
         maxZoom: maxZoom,
         attribution: 'Imagery &copy; Google'
     });
@@ -269,6 +268,13 @@ function setTrigMarkers(coords) {
         L.marker(c, {icon: squareIcon('#3cb44b', 10)}).addTo(trigMarkers);
     });
 }
+function setTrigMarkersVisible(visible) {
+    if (visible && !map.hasLayer(trigMarkers)) {
+        trigMarkers.addTo(map);
+    } else if (!visible && map.hasLayer(trigMarkers)) {
+        trigMarkers.remove();
+    }
+}
 function setErrorMarkers(items) {
     errorMarkers.clearLayers();
     items.forEach(function(item) {
@@ -369,10 +375,19 @@ class MapWidget(QWidget):
 
         self.show_photos_checkbox = QCheckBox("Отобразить фотографии")
         self.show_photos_checkbox.setChecked(True)
-        self.show_photos_checkbox.toggled.connect(self.set_cam_markers_visible)
+        self.show_photos_checkbox.toggled.connect(self.set_photo_markers_visible)
 
         self.photo_count_label = QLabel("Количество фотографий нет")
         self.photo_count_label.setStyleSheet("color: white;")
+
+        self.photo_count_help_label = QLabel("?")
+        self.photo_count_help_label.setToolTip(
+            "<span style='color:#ffeb3b;'>&#9632;</span> &mdash; количество отправленных фотоимпульсов в камеру<br>"
+            "<span style='color:#3cb44b;'>&#9632;</span> &mdash; количество полученных фотоимпульсов от камеры"
+        )
+        self.photo_count_help_label.setStyleSheet(
+            "QLabel { border: 1px solid gray; border-radius: 8px; padding: 0px 5px; color: white; }"
+        )
 
         self.show_errors_checkbox = QCheckBox("Ошибки")
         self.show_errors_checkbox.setChecked(True)
@@ -405,7 +420,7 @@ class MapWidget(QWidget):
         error_legend_layout = QVBoxLayout(self.error_legend)
         error_legend_layout.setContentsMargins(8, 6, 8, 6)
         error_legend_layout.setSpacing(4)
-        title = QLabel("Метки")
+        title = QLabel("Ошибки и сбои")
         title.setStyleSheet("color: white; font-weight: bold;")
         error_legend_layout.addWidget(title)
         for color, text in (("#000000", "Failsafe"), ("#ff8c00", "Assist"), ("#e6194b", "Error")):
@@ -678,6 +693,13 @@ class MapWidget(QWidget):
 
     def set_trig_markers(self, coords: list[tuple[float, float]]):
         self._run_js(f"setTrigMarkers({json.dumps(coords)});")
+
+    def set_trig_markers_visible(self, visible: bool):
+        self._run_js(f"setTrigMarkersVisible({'true' if visible else 'false'});")
+
+    def set_photo_markers_visible(self, visible: bool):
+        self.set_cam_markers_visible(visible)
+        self.set_trig_markers_visible(visible)
 
     def set_error_markers(self, items: list[dict]):
         """items: list of {"lat": float, "lon": float, "text": str}."""
