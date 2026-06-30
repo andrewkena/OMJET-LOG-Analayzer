@@ -63,9 +63,12 @@ class MessageTree(QWidget):
         tree.setColumnCount(2)
         tree.setHeaderLabels([header, ""])
         tree.header().setStretchLastSection(False)
+        tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         tree.header().setSectionResizeMode(1, QHeaderView.Fixed)
         tree.setColumnWidth(1, 26)
         tree.itemChanged.connect(self._on_item_changed)
+        tree.itemExpanded.connect(lambda _item: tree.resizeColumnToContents(0))
+        tree.itemCollapsed.connect(lambda _item: tree.resizeColumnToContents(0))
         return tree
 
     def _make_presets_tree(self, header: str) -> QTreeWidget:

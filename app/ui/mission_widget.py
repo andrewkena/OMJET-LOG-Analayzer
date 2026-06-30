@@ -284,6 +284,11 @@ class _MissionMapWidget(QWidget):
         if checked:
             self._run_js("fitAll();")
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.fit_checkbox.isChecked():
+            self._run_js("map.invalidateSize(); fitAll();")
+
 
 class MissionWidget(QWidget):
     def __init__(self, parent=None):
@@ -316,6 +321,7 @@ class MissionWidget(QWidget):
         splitter.addWidget(self.table)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([10000, 10000])
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.download_button)

@@ -9,6 +9,18 @@ from PySide6.QtCore import Signal
 
 from app.core import tile_cache
 
+_CACHE_SIZE_OPTIONS = [
+    ("250 МБ", 250 * 1024 * 1024),
+    ("500 МБ", 500 * 1024 * 1024),
+    ("750 МБ", 750 * 1024 * 1024),
+    ("1 ГБ", 1024 * 1024 * 1024),
+    ("1.5 ГБ", int(1.5 * 1024 ** 3)),
+    ("2 ГБ", 2 * 1024 ** 3),
+    ("3 ГБ", 3 * 1024 ** 3),
+    ("4 ГБ", 4 * 1024 ** 3),
+    ("5 ГБ", 5 * 1024 ** 3),
+]
+
 
 class SettingsWidget(QWidget):
     """Application settings - battery configuration and preferences."""
@@ -39,8 +51,16 @@ class SettingsWidget(QWidget):
         self._eff_green = 200
         self._eff_yellow = 300
         self._eff_red = 400
+        self._tile_handler = None
 
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        columns_layout = QHBoxLayout()
+        outer_layout.addLayout(columns_layout)
+        left_layout = QVBoxLayout()
+        right_layout = QVBoxLayout()
+        columns_layout.addLayout(left_layout, 1)
+        columns_layout.addLayout(right_layout, 1)
+        layout = left_layout
 
         # Theme selection
         theme_group = QGroupBox("Тема приложения")
@@ -84,13 +104,27 @@ class SettingsWidget(QWidget):
         self.cache_size_label = QLabel()
         self._update_cache_size_label()
         cache_layout.addWidget(self.cache_size_label)
+
+        max_cache_row = QHBoxLayout()
+        max_cache_row.addWidget(QLabel("Максимальный объём:"))
+        self.max_cache_size_combo = QComboBox()
+        for label, value in _CACHE_SIZE_OPTIONS:
+            self.max_cache_size_combo.addItem(label, value)
+        self.max_cache_size_combo.setCurrentIndex(self.max_cache_size_combo.findData(tile_cache.DEFAULT_MAX_CACHE_BYTES))
+        self.max_cache_size_combo.currentIndexChanged.connect(self._on_max_cache_size_changed)
+        max_cache_row.addWidget(self.max_cache_size_combo)
+        max_cache_row.addStretch()
+        cache_layout.addLayout(max_cache_row)
+
         self.clear_cache_button = QPushButton("Очистить кэш картографических данных")
         self.clear_cache_button.clicked.connect(self._on_clear_cache_clicked)
         cache_layout.addWidget(self.clear_cache_button)
         layout.addWidget(cache_group)
 
+        layout = right_layout
+
         # Battery Configuration
-        battery_group = QGroupBox("Battery Configuration")
+        battery_group = QGroupBox("Настройка батареи")
         battery_layout = QFormLayout(battery_group)
 
         # Cell count selector
@@ -98,22 +132,22 @@ class SettingsWidget(QWidget):
         self.cell_count_combo.addItems(["4S", "6S", "8S", "10S", "12S"])
         self.cell_count_combo.setCurrentText("8S")
         self.cell_count_combo.currentTextChanged.connect(self._on_cell_count_changed)
-        battery_layout.addRow("Cell Count:", self.cell_count_combo)
+        battery_layout.addRow("Количество ячеек:", self.cell_count_combo)
 
         # HV checkbox for LiHV batteries
-        self.hv_checkbox = QCheckBox("LiHV (High Voltage)")
+        self.hv_checkbox = QCheckBox("LiHV (повышенное напряжение)")
         self.hv_checkbox.setToolTip(
-            "Enable for LiHV batteries\n"
-            "Standard LiPo: 4.20V/cell (full) / 3.60V/cell (empty)\n"
-            "LiHV: 4.35V/cell (full) / 3.60V/cell (empty)"
+            "Включить для батарей LiHV\n"
+            "Стандартный LiPo: 4.20В/ячейку (полный) / 3.60В/ячейку (пустой)\n"
+            "LiHV: 4.35В/ячейку (полный) / 3.60В/ячейку (пустой)"
         )
         self.hv_checkbox.stateChanged.connect(self._on_hv_changed)
-        battery_layout.addRow("Battery Type:", self.hv_checkbox)
+        battery_layout.addRow("Тип батареи:", self.hv_checkbox)
 
         # Voltage thresholds info
         self.threshold_label = QLabel()
         self._update_threshold_label()
-        battery_layout.addRow("Voltage Range:", self.threshold_label)
+        battery_layout.addRow("Диапазон напряжения:", self.threshold_label)
 
         layout.addWidget(battery_group)
 
@@ -142,17 +176,17 @@ class SettingsWidget(QWidget):
         speed_row = QHBoxLayout()
         self.speed_min_spin = QSpinBox()
         self.speed_min_spin.setRange(0, 200)
-        self.speed_min_spin.setSuffix(" m/s")
+        self.speed_min_spin.setSuffix(" м/с")
         self.speed_min_spin.setValue(self._speed_min)
         self.speed_min_spin.valueChanged.connect(self._on_speed_thresholds_changed)
         self.speed_target_spin = QSpinBox()
         self.speed_target_spin.setRange(0, 200)
-        self.speed_target_spin.setSuffix(" m/s")
+        self.speed_target_spin.setSuffix(" м/с")
         self.speed_target_spin.setValue(self._speed_target)
         self.speed_target_spin.valueChanged.connect(self._on_speed_thresholds_changed)
         self.speed_max_spin = QSpinBox()
         self.speed_max_spin.setRange(0, 200)
-        self.speed_max_spin.setSuffix(" m/s")
+        self.speed_max_spin.setSuffix(" м/с")
         self.speed_max_spin.setValue(self._speed_max)
         self.speed_max_spin.valueChanged.connect(self._on_speed_thresholds_changed)
 
@@ -206,19 +240,20 @@ class SettingsWidget(QWidget):
         layout.addWidget(efficiency_group)
 
         # Info section
-        info_group = QGroupBox("Battery Voltage Info")
+        info_group = QGroupBox("Информация о напряжении батареи")
         info_layout = QVBoxLayout(info_group)
 
         info_layout.addWidget(QLabel("LiPo / Li-ion:"))
-        info_layout.addWidget(QLabel("  • Full charge: 4.20V per cell"))
-        info_layout.addWidget(QLabel("  • Safe minimum: 3.60V per cell"))
+        info_layout.addWidget(QLabel("  • Полный заряд: 4.20В на ячейку"))
+        info_layout.addWidget(QLabel("  • Безопасный минимум: 3.60В на ячейку"))
         info_layout.addWidget(QLabel(""))
-        info_layout.addWidget(QLabel("LiHV (High Voltage):"))
-        info_layout.addWidget(QLabel("  • Full charge: 4.35V per cell"))
-        info_layout.addWidget(QLabel("  • Safe minimum: 3.60V per cell"))
+        info_layout.addWidget(QLabel("LiHV (повышенное напряжение):"))
+        info_layout.addWidget(QLabel("  • Полный заряд: 4.35В на ячейку"))
+        info_layout.addWidget(QLabel("  • Безопасный минимум: 3.60В на ячейку"))
 
         layout.addWidget(info_group)
-        layout.addStretch()
+        left_layout.addStretch()
+        right_layout.addStretch()
 
     @staticmethod
     def _make_dot(color: str) -> QLabel:
@@ -269,13 +304,13 @@ class SettingsWidget(QWidget):
         """Update the voltage threshold display."""
         if self._battery_hv:
             self.threshold_label.setText(
-                f"<span style='color: #3cb44b;'>4.35V</span> / "
-                f"<span style='color: #e6194b;'>3.60V</span> per cell"
+                f"<span style='color: #3cb44b;'>4.35В</span> / "
+                f"<span style='color: #e6194b;'>3.60В</span> на ячейку"
             )
         else:
             self.threshold_label.setText(
-                f"<span style='color: #3cb44b;'>4.20V</span> / "
-                f"<span style='color: #e6194b;'>3.60V</span> per cell"
+                f"<span style='color: #3cb44b;'>4.20В</span> / "
+                f"<span style='color: #e6194b;'>3.60В</span> на ячейку"
             )
 
     def _on_current_thresholds_changed(self):
@@ -352,6 +387,22 @@ class SettingsWidget(QWidget):
         """Refresh the displayed map tile cache size."""
         size = tile_cache.get_cache_size_bytes()
         self.cache_size_label.setText(f"Объём картографических данных: {tile_cache.format_size(size)}")
+
+    def refresh_cache_size_label(self):
+        """Public hook for other widgets to refresh the cache size display."""
+        self._update_cache_size_label()
+
+    def set_tile_handler(self, tile_handler):
+        """Wire up the live tile scheme handler so changing the max size can
+        immediately re-check the on-disk cache against the new limit."""
+        self._tile_handler = tile_handler
+
+    def _on_max_cache_size_changed(self, index: int):
+        """Handle the max cache size selection change."""
+        value = self.max_cache_size_combo.itemData(index)
+        tile_cache.set_max_cache_size_bytes(value)
+        if self._tile_handler is not None:
+            self._tile_handler.recheck_cache_limit()
 
     def _on_clear_cache_clicked(self):
         """Handle the 'clear map cache' button click."""

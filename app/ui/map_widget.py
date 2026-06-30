@@ -135,19 +135,34 @@ var failsafeIcon = L.divIcon({
     iconSize: [18, 18],
     iconAnchor: [9, 9]
 });
-var vtolIconHtml = '<svg width="32" height="32" viewBox="0 0 24 24">' +
-    '<g transform="rotate(0 12 12)">' +
-    '<path d="M12 2 L13.2 9.2 L21 15 L21 16.8 L13 14.3 L13.6 19.2 L16 21 L16 22 L12 21 L8 22 L8 21 L10.4 19.2 L11 14.3 L3 16.8 L3 15 L10.8 9.2 Z" ' +
-    'fill="#e6194b" fill-opacity="0.35" stroke="#ffffff" stroke-width="1"/>' +
-    '</g></svg>';
-var vtolIcon = L.divIcon({
-    html: vtolIconHtml,
-    className: 'vtol-icon',
-    iconSize: [32, 32],
-    iconAnchor: [16, 16]
-});
+function buildVtolIcon(scale) {
+    var size = 32 * scale;
+    var half = size / 2;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24">' +
+        '<g transform="rotate(0 12 12)">' +
+        '<path d="M12 2 L13.2 9.2 L21 15 L21 16.8 L13 14.3 L13.6 19.2 L16 21 L16 22 L12 21 L8 22 L8 21 L10.4 19.2 L11 14.3 L3 16.8 L3 15 L10.8 9.2 Z" ' +
+        'fill="#e6194b" fill-opacity="0.35" stroke="#ffffff" stroke-width="1"/>' +
+        '</g></svg>';
+    return L.divIcon({
+        html: html,
+        className: 'vtol-icon',
+        iconSize: [size, size],
+        iconAnchor: [half, half]
+    });
+}
+var iconScale = 1;
+var lastHeading = 0;
+var vtolIcon = buildVtolIcon(iconScale);
 var marker = L.marker([0, 0], {icon: vtolIcon, draggable: true}).addTo(map);
 marker.bindTooltip('00:00', {permanent: true, direction: 'top', offset: [0, -10], className: 'time-tooltip'});
+function setIconScale(scale) {
+    iconScale = scale;
+    vtolIcon = buildVtolIcon(iconScale);
+    marker.setIcon(vtolIcon);
+    var el = marker.getElement();
+    var g = el ? el.querySelector('g') : null;
+    if (g) g.setAttribute('transform', 'rotate(' + lastHeading + ' 12 12)');
+}
 
 var pybridge = null;
 if (typeof QWebChannel !== 'undefined') {
@@ -232,6 +247,7 @@ function setCursor(lat, lon, timeLabel, heading) {
         marker.setTooltipContent(timeLabel);
     }
     if (heading !== undefined) {
+        lastHeading = heading;
         var el = marker.getElement();
         var g = el ? el.querySelector('g') : null;
         if (g) g.setAttribute('transform', 'rotate(' + heading + ' 12 12)');
@@ -389,6 +405,13 @@ class MapWidget(QWidget):
             "QLabel { border: 1px solid gray; border-radius: 8px; padding: 0px 5px; color: white; }"
         )
 
+        self.icon_size_label = QLabel("Размер иконки:")
+        self.icon_size_label.setStyleSheet("color: white;")
+        self.icon_size_combo = QComboBox()
+        self.icon_size_combo.addItems(["x0.5", "x1", "x2", "x5"])
+        self.icon_size_combo.setCurrentText("x1")
+        self.icon_size_combo.currentTextChanged.connect(self._on_icon_size_changed)
+
         self.show_errors_checkbox = QCheckBox("Ошибки")
         self.show_errors_checkbox.setChecked(True)
         self.show_errors_checkbox.toggled.connect(self.set_error_markers_visible)
@@ -423,7 +446,7 @@ class MapWidget(QWidget):
         title = QLabel("Ошибки и сбои")
         title.setStyleSheet("color: white; font-weight: bold;")
         error_legend_layout.addWidget(title)
-        for color, text in (("#000000", "Failsafe"), ("#ff8c00", "Assist"), ("#e6194b", "Error")):
+        for color, text in (("#000000", "Фэйлсейф"), ("#ff8c00", "Ассистент"), ("#e6194b", "Ошибка")):
             row = QHBoxLayout()
             row.setSpacing(6)
             swatch = QLabel()
@@ -681,6 +704,13 @@ class MapWidget(QWidget):
         if trig_count:
             parts.append(f"<span style='color:#3cb44b;'>&#9632;</span> {trig_count}")
         self.photo_count_label.setText("Количество фотографий " + "&nbsp;&nbsp;&nbsp;".join(parts))
+
+    def _on_icon_size_changed(self, text: str):
+        scale = float(text.lstrip("x"))
+        self.set_icon_scale(scale)
+
+    def set_icon_scale(self, scale: float):
+        self._run_js(f"setIconScale({scale});")
 
     def set_mission(self, waypoints: list[tuple[float, float]]):
         self._run_js(f"setMission({json.dumps(waypoints)});")

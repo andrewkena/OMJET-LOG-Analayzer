@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 
+from app.core import tile_cache
 from app.core.log_loader import LogData
 from app.core.log_load_worker import LogLoadWorker
 from app.ui.message_tree import MessageTree
@@ -80,8 +81,9 @@ SERVO_FUNCTION_IDS = {
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, tile_handler=None):
         super().__init__()
+        self._tile_handler = tile_handler
         self.setWindowTitle("ОМДЖЕТ ЛОГ Анализатор")
         self.setWindowIcon(QIcon(str(_ASSETS_DIR / "logo.ico")))
         self.resize(1920, 1080)
@@ -130,6 +132,21 @@ class MainWindow(QMainWindow):
         self.attitude_panel.set_battery_cell_count(self.settings_widget.get_battery_cell_count())
         self.attitude_panel.set_current_thresholds(*self.settings_widget.get_current_thresholds())
         self.attitude_panel.set_speed_thresholds(*self.settings_widget.get_speed_thresholds())
+
+        if self._tile_handler is not None:
+            self._tile_handler.cache_limit_exceeded.connect(self._on_cache_limit_exceeded)
+            self.settings_widget.set_tile_handler(self._tile_handler)
+
+    def _on_cache_limit_exceeded(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Кэш карты")
+        box.setText("Объём картографических данных превышен")
+        delete_button = box.addButton("Удалить данные", QMessageBox.AcceptRole)
+        box.addButton("Закрыть", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() == delete_button:
+            tile_cache.clear_cache()
+            self.settings_widget.refresh_cache_size_label()
 
     def _build_layout(self):
         self.message_tree = MessageTree()
@@ -244,6 +261,13 @@ class MainWindow(QMainWindow):
         playback_row.addWidget(photo_count_separator)
         playback_row.addWidget(self.map_widget.photo_count_label)
         playback_row.addWidget(self.map_widget.photo_count_help_label)
+        playback_row.addSpacing(20)
+        icon_size_separator = QFrame()
+        icon_size_separator.setFrameShape(QFrame.VLine)
+        icon_size_separator.setFrameShadow(QFrame.Sunken)
+        playback_row.addWidget(icon_size_separator)
+        playback_row.addWidget(self.map_widget.icon_size_label)
+        playback_row.addWidget(self.map_widget.icon_size_combo)
         playback_row.addStretch()
 
         map_tab = QWidget()

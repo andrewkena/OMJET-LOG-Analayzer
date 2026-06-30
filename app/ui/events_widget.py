@@ -17,14 +17,13 @@ from app.core.event_decoder import decode_event, decode_error
 _SEVERITY_COLORS = {
     "critical": (QColor("#7a1f1f"), QColor("#ffffff")),
     "warning": (QColor("#7a5a1f"), QColor("#ffffff")),
+    "event": (QColor("#7a1f1f"), QColor("#ffffff")),
+    "mode": (QColor("#1f3a7a"), QColor("#ffffff")),
 }
 
 _RESOLVED_WORDS = ("off", "cleared", "resolved", "restored")
 _CRITICAL_MSG_WORDS = ("crash", "abort", "emergency", "lost link", "fatal", "parachute")
 _WARNING_MSG_WORDS = ("fail", "bad ", "unhealthy", "low batt", "warn", "ekf", "prearm", "glitch")
-
-_CRITICAL_EVENT_IDS = {51, 54}  # Парашют выпущен, аварийная остановка моторов
-_WARNING_EVENT_IDS = {20, 28, 29, 34, 59}  # потеря GPS, посадка не подтверждена, autotune ошибка, ротор ниже критической
 
 # Substring -> Russian translation for common ArduPilot STATUSTEXT (MSG) prefixes.
 _MSG_TRANSLATIONS = [
@@ -88,22 +87,16 @@ def _decode_message(row: dict) -> str:
 def _severity(row: dict, decoded: str) -> str:
     msg_type = row["type"]
     decoded_lower = decoded.lower()
+    if msg_type == "EV":
+        return "event"
+    if msg_type == "MODE":
+        return "mode"
     if msg_type == "ERR":
         try:
             ecode = int(row.get("ECode", 1))
         except (TypeError, ValueError):
             ecode = 1
         return "info" if ecode == 0 else "critical"
-    if msg_type == "EV":
-        try:
-            event_id = int(row.get("Id", 0))
-        except (TypeError, ValueError):
-            event_id = 0
-        if event_id in _CRITICAL_EVENT_IDS:
-            return "critical"
-        if event_id in _WARNING_EVENT_IDS:
-            return "warning"
-        return "info"
     if msg_type == "MSG":
         if "failsafe" in decoded_lower or "fail safe" in decoded_lower:
             return "info" if any(w in decoded_lower for w in _RESOLVED_WORDS) else "critical"

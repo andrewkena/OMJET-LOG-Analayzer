@@ -6,6 +6,34 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
+from typing import Callable
+
+DEFAULT_MAX_CACHE_BYTES = 1024 * 1024 * 1024
+MIN_MAX_CACHE_BYTES = 250 * 1024 * 1024
+MAX_MAX_CACHE_BYTES = 5 * 1024 * 1024 * 1024
+
+_max_cache_bytes = DEFAULT_MAX_CACHE_BYTES
+_cache_cleared_callbacks: list[Callable[[], None]] = []
+
+
+def get_max_cache_size_bytes() -> int:
+    return _max_cache_bytes
+
+
+def set_max_cache_size_bytes(value: int) -> None:
+    global _max_cache_bytes
+    _max_cache_bytes = value
+
+
+def is_cache_over_limit() -> bool:
+    return get_cache_size_bytes() > _max_cache_bytes
+
+
+def register_cache_cleared_callback(callback: Callable[[], None]) -> None:
+    """Register a callback invoked whenever clear_cache() runs, so other
+    components tracking cache size (e.g. the tile scheme handler) can
+    reset their own counters instead of re-walking the disk."""
+    _cache_cleared_callbacks.append(callback)
 
 
 def get_app_dir() -> Path:
@@ -42,3 +70,5 @@ def clear_cache() -> None:
             shutil.rmtree(item, ignore_errors=True)
         else:
             item.unlink(missing_ok=True)
+    for callback in _cache_cleared_callbacks:
+        callback()

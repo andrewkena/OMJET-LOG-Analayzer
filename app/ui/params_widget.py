@@ -1,6 +1,7 @@
 """Parameter list extracted from the log (PARM / PARAM_VALUE), laid out as
-three side-by-side columns so long parameter lists don't require excessive
-vertical scrolling."""
+six side-by-side columns so long parameter lists don't require excessive
+vertical scrolling. Each row is numbered, with numbering running through
+continuously from the first column to the last."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from app.core.log_loader import LogData
 
-_COLUMN_COUNT = 3
+_COLUMN_COUNT = 6
 
 
 class ParamsWidget(QWidget):
@@ -35,11 +36,13 @@ class ParamsWidget(QWidget):
         columns_layout = QHBoxLayout()
         for _ in range(_COLUMN_COUNT):
             table = QTableWidget()
-            table.setColumnCount(2)
-            table.setHorizontalHeaderLabels(["Parameter", "Value"])
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["№", "Parameter", "Value"])
+            table.verticalHeader().setVisible(False)
             table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             table.setSelectionBehavior(QAbstractItemView.SelectRows)
             table.setSortingEnabled(True)
+            table.horizontalHeader().setStretchLastSection(True)
             self.tables.append(table)
             columns_layout.addWidget(table)
 
@@ -56,14 +59,18 @@ class ParamsWidget(QWidget):
         chunks = [rows[i:i + chunk_size] for i in range(0, len(rows), chunk_size)]
         chunks += [[]] * (_COLUMN_COUNT - len(chunks))
 
+        number = 1
         for table, chunk in zip(self.tables, chunks):
             table.setSortingEnabled(False)
             table.setRowCount(len(chunk))
             for i, row in enumerate(chunk):
-                table.setItem(i, 0, QTableWidgetItem(row["name"]))
-                table.setItem(i, 1, QTableWidgetItem(f"{row['value']:g}"))
+                table.setItem(i, 0, QTableWidgetItem(str(number)))
+                table.setItem(i, 1, QTableWidgetItem(row["name"]))
+                table.setItem(i, 2, QTableWidgetItem(f"{row['value']:g}"))
+                number += 1
             table.setSortingEnabled(True)
             table.resizeColumnsToContents()
+            table.setColumnWidth(0, max(20, table.columnWidth(0) // 2))
 
     def _apply_filter(self, text: str):
         text = text.strip().lower()

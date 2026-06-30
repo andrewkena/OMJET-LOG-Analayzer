@@ -15,7 +15,7 @@ def main():
     app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / "assets" / "logo.ico")))
     tile_handler = TileCacheSchemeHandler(app)
     QWebEngineProfile.defaultProfile().installUrlSchemeHandler(SCHEME, tile_handler)
-    window = MainWindow()
+    window = MainWindow(tile_handler=tile_handler)
     window.show()
     sys.exit(app.exec())
 

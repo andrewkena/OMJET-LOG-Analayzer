@@ -379,11 +379,11 @@ var legend = L.control({position: 'bottomright'});
 legend.onAdd = function() {
     var div = L.DomUtil.create('div', 'map-legend');
     div.innerHTML =
-        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-green"></span></span>Точка фото</div>' +
-        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-yellow"></span></span>Выделенная точка</div>' +
-        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-gray"></span></span>Точка фото (исключена)</div>' +
-        '<div class="legend-row"><span class="legend-swatch"><span class="legend-triangle-red"></span></span>Точка GNSS</div>' +
-        '<div class="legend-row"><span class="legend-swatch"><span class="legend-triangle-gray"></span></span>GNSS исключена</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-green"></span></span>Фотография</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-yellow"></span></span>Выделенная фотография</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-circle-gray"></span></span>Исключенная фотография</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-triangle-red"></span></span>Геометка GNSS</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-triangle-gray"></span></span>Исключенная Геометка GNSS</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line"></span></span>Маршрут</div>';
     L.DomEvent.disableClickPropagation(div);
     return div;
@@ -864,6 +864,7 @@ class PhotoGeotagWidget(QWidget):
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([10000, 10000])
         layout.addWidget(splitter)
 
         self._rows: list[list[str]] = []

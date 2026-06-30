@@ -4,11 +4,11 @@ request and saving the result, so tiles stay available offline afterwards.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QByteArray, QUrl
+from PySide6.QtCore import QBuffer, QByteArray, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWebEngineCore import QWebEngineUrlRequestJob, QWebEngineUrlScheme, QWebEngineUrlSchemeHandler
 
-from app.core.tile_cache import get_cache_dir
+from app.core.tile_cache import get_cache_dir, get_cache_size_bytes, get_max_cache_size_bytes, register_cache_cleared_callback
 
 SCHEME = b"tilecache"
 _VALID_LAYERS = ("s", "y", "m", "p")
@@ -29,9 +29,14 @@ def register_tile_scheme():
 class TileCacheSchemeHandler(QWebEngineUrlSchemeHandler):
     """Handles tilecache://tile/<lyrs>/<z>/<x>/<y> requests."""
 
+    cache_limit_exceeded = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._manager = QNetworkAccessManager(self)
+        self._cached_bytes = get_cache_size_bytes()
+        self._limit_warning_shown = self._cached_bytes > get_max_cache_size_bytes()
+        register_cache_cleared_callback(self._on_cache_cleared)
 
     def requestStarted(self, job: QWebEngineUrlRequestJob):
         url: QUrl = job.requestUrl()
@@ -69,12 +74,32 @@ class TileCacheSchemeHandler(QWebEngineUrlSchemeHandler):
             data = bytes(reply.readAll())
             try:
                 tile_path.write_bytes(data)
+                self._cached_bytes += len(data)
+                self._check_cache_limit()
             except OSError:
                 pass
             self._reply_with_bytes(job, data)
 
         reply.finished.connect(on_finished)
         job.destroyed.connect(reply.abort)
+
+    def _check_cache_limit(self):
+        if self._limit_warning_shown:
+            return
+        if self._cached_bytes > get_max_cache_size_bytes():
+            self._limit_warning_shown = True
+            self.cache_limit_exceeded.emit()
+
+    def _on_cache_cleared(self):
+        self._cached_bytes = 0
+        self._limit_warning_shown = False
+
+    def recheck_cache_limit(self):
+        """Re-evaluate the limit after the configured max size changes."""
+        if self._cached_bytes <= get_max_cache_size_bytes():
+            self._limit_warning_shown = False
+        else:
+            self._check_cache_limit()
 
     @staticmethod
     def _reply_with_bytes(job: QWebEngineUrlRequestJob, data: bytes):
