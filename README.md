@@ -1,3 +1,4 @@
+<img width="1464" height="846" alt="1" src="https://github.com/user-attachments/assets/0ec5aa8a-ef16-4970-b945-c188ab15d719" />
 # OMJET Log Analyzer
 
 Продвинутое десктопное приложение для анализа полётных логов ArduPilot (.bin, .log, .tlog).
@@ -5,6 +6,11 @@
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![PySide6](https://img.shields.io/badge/PySide6-6.6+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+<img width="1464" height="846" alt="1" src="https://github.com/user-attachments/assets/4224d531-6944-4c63-848e-5a7e77dd424e" />
+<img width="1464" height="846" alt="2" src="https://github.com/user-attachments/assets/54196986-86ca-43f0-8a64-00b2eeecdf76" />
+<img width="1464" height="846" alt="4" src="https://github.com/user-attachments/assets/5d46d0c5-953e-4d31-b03d-cde726cd0158" />
+![Uploading 6.jpg…]()
+![Uploading 7.jpg…]()
 
 ## Возможности
 
