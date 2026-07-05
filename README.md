@@ -33,8 +33,9 @@
 
 <img width="1464" height="846" alt="2" src="https://github.com/user-attachments/assets/54196986-86ca-43f0-8a64-00b2eeecdf76" />
 <img width="1464" height="846" alt="4" src="https://github.com/user-attachments/assets/5d46d0c5-953e-4d31-b03d-cde726cd0158" />
-![Uploading 6.jpg…]()
-![Uploading 7.jpg…]()
+<img width="1464" height="846" alt="6" src="https://github.com/user-attachments/assets/32ba65a3-a62d-4ca4-bb80-d4ac65571992" />
+<img width="1464" height="846" alt="7" src="https://github.com/user-attachments/assets/ca952be3-747c-416d-8780-778ef614c0d9" />
+
 
 ## Установка
 
