@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 
 from app.core import tile_cache, i18n
+from app.core.version import APP_VERSION
 from app.core.log_loader import LogData
 from app.core.log_load_worker import LogLoadWorker
 from app.ui.message_tree import MessageTree
@@ -84,9 +85,9 @@ class MainWindow(QMainWindow):
     def __init__(self, tile_handler=None):
         super().__init__()
         self._tile_handler = tile_handler
-        self.setWindowTitle("ОМДЖЕТ ЛОГ Анализатор")
+        self.setWindowTitle(f"ОМДЖЕТ ЛОГ Анализатор  v{APP_VERSION}")
         self.setWindowIcon(QIcon(str(_ASSETS_DIR / "logo.ico")))
-        self.resize(1920, 1080)
+        self.resize(1920, 1000)
         self.setMinimumWidth(1920)
 
         self.log_data: LogData | None = None
@@ -204,6 +205,7 @@ class MainWindow(QMainWindow):
         graph_tab_layout.addWidget(graph_splitter)
 
         self.map_widget = MapWidget()
+        self.map_widget.cursor_time_changed.connect(self._on_cursor_moved)
 
         self.timeline_widget = TimelineWidget()
         self.timeline_widget.cursor_changed.connect(self._on_cursor_moved)
@@ -404,7 +406,6 @@ class MainWindow(QMainWindow):
             graph.clear_selected_range()
             graph.set_time_origin(log_data.start_time)
         self.map_widget.set_time_origin(log_data.start_time)
-        self.map_widget.cursor_time_changed.connect(self._on_cursor_moved)
         self.events_widget.load(self.log_data)
         self.params_widget.load(self.log_data)
         self.mission_widget.load(self.log_data)
@@ -710,6 +711,17 @@ class MainWindow(QMainWindow):
                 rudder_pwm = 1500.0 + ((left_pwm - 1500.0) - (right_pwm - 1500.0)) / 2.0
                 self.motor_servo_panel.set_pwm_series("Elevator", t, elevator_pwm)
                 self.motor_servo_panel.set_pwm_series("Rudder", t, rudder_pwm)
+
+        has_4_motors = all(k in channel_for_function for k in ("Motor1", "Motor2", "Motor3", "Motor4"))
+        has_throttle = "Throttle" in channel_for_function
+        has_vtail = "VTailLeft" in channel_for_function and "VTailRight" in channel_for_function
+        if has_4_motors and has_throttle and has_vtail:
+            vehicle_type = "VTOL 4+1"
+        elif has_4_motors:
+            vehicle_type = "Квадрокоптер"
+        else:
+            vehicle_type = "Неизвестен"
+        self.attitude_panel.set_vehicle_type(vehicle_type)
 
     def _on_field_toggled(self, msg_type: str, field_name: str, checked: bool):
         key = f"{msg_type}.{field_name}"

@@ -43,10 +43,14 @@ def get_app_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+# Computed once at import time on the main thread — requestStarted runs on Qt IO thread
+# where calling Path.resolve() / ntpath.realpath causes heap corruption on Windows.
+_CACHE_DIR: Path = get_app_dir() / "map_cache"
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def get_cache_dir() -> Path:
-    cache_dir = get_app_dir() / "map_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    return _CACHE_DIR
 
 
 def get_cache_size_bytes() -> int:

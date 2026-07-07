@@ -34,19 +34,58 @@ _DISARM_EVENT_ID = 11
 
 
 def _extract_gps_track(log_data: LogData) -> list[tuple[float, float, float]]:
-    """Return list of (lat, lon, alt_m) from the best GPS source available."""
-    for msg, lat_f, lon_f, alt_f in _GPS_CANDIDATES:
+    """Return list of (lat, lon, alt_m_above_home) from GPS position + BARO altitude."""
+    # --- GPS lat/lon ---
+    gps_t = gps_lat = gps_lon = None
+    for msg, lat_f, lon_f, _alt_f in _GPS_CANDIDATES:
         table = log_data.messages.get(msg)
-        if table and lat_f in table and lon_f in table:
-            lat = np.asarray(table[lat_f], dtype=float)
-            lon = np.asarray(table[lon_f], dtype=float)
-            alt_raw = table.get(alt_f)
-            alt = np.asarray(alt_raw if alt_raw is not None else np.zeros(len(lat)), dtype=float)
+        if not (table and lat_f in table and lon_f in table):
+            continue
+        lat = np.asarray(table[lat_f], dtype=float)
+        lon = np.asarray(table[lon_f], dtype=float)
+        if msg == "GLOBAL_POSITION_INT":
+            lat = lat / 1e7
+            lon = lon / 1e7
+        valid = ~((lat == 0.0) & (lon == 0.0))
+        if not valid.any():
+            continue
+        gps_t = np.asarray(table["timestamp"], dtype=float)[valid]
+        gps_lat = lat[valid]
+        gps_lon = lon[valid]
+        break
+
+    if gps_t is None:
+        return []
+
+    # --- Altitude: BARO relative-to-home (best for flight viz), fallback GPS MSL ---
+    alt = np.zeros(len(gps_t))
+    for baro_msg, baro_field in [("BARO", "Alt"), ("CTUN", "BarAlt"), ("CTUN", "Alt")]:
+        btable = log_data.messages.get(baro_msg)
+        if btable and baro_field in btable:
+            baro_t = np.asarray(btable["timestamp"], dtype=float)
+            baro_alt = np.asarray(btable[baro_field], dtype=float)
+            if len(baro_t) > 1:
+                alt = np.interp(gps_t, baro_t, baro_alt)
+                break
+    else:
+        # fallback: use GPS MSL alt (absolute, may differ from terrain)
+        for msg, lat_f, lon_f, alt_f in _GPS_CANDIDATES:
+            table = log_data.messages.get(msg)
+            if not (table and alt_f in table and lat_f in table):
+                continue
+            lat_raw = np.asarray(table[lat_f], dtype=float)
             if msg == "GLOBAL_POSITION_INT":
-                lat /= 1e7; lon /= 1e7; alt /= 1000.0
-            valid = ~((lat == 0.0) & (lon == 0.0))
-            return list(zip(lat[valid].tolist(), lon[valid].tolist(), alt[valid].tolist()))
-    return []
+                lat_raw = lat_raw / 1e7
+            v = ~(lat_raw == 0.0)
+            if not v.any():
+                continue
+            raw_alt = np.asarray(table[alt_f], dtype=float)
+            if msg == "GLOBAL_POSITION_INT":
+                raw_alt = raw_alt / 1000.0
+            alt = np.interp(gps_t, np.asarray(table["timestamp"], dtype=float)[v], raw_alt[v])
+            break
+
+    return list(zip(gps_lat.tolist(), gps_lon.tolist(), alt.tolist()))
 
 
 def _extract_photo_positions(log_data: LogData) -> list[tuple[float, float, float, str]]:
@@ -115,6 +154,23 @@ def _wind_at(log_data: LogData, t: float) -> Optional[tuple[float, float]]:
     return None
 
 
+def _avg_wind(log_data: LogData, t_start: float, t_end: float) -> Optional[tuple[float, float]]:
+    """Mean (vwn, vwe) over [t_start, t_end], or None if no wind data."""
+    for msg, nf, ef in _WIND_CANDIDATES:
+        table = log_data.messages.get(msg)
+        if not (table and nf in table and ef in table):
+            continue
+        ts = np.asarray(table["timestamp"], dtype=float)
+        mask = (ts >= t_start) & (ts <= t_end)
+        if not mask.any():
+            return None
+        return (
+            float(np.mean(np.asarray(table[nf], dtype=float)[mask])),
+            float(np.mean(np.asarray(table[ef], dtype=float)[mask])),
+        )
+    return None
+
+
 def _gps_pos_at(log_data: LogData, t: float) -> Optional[tuple[float, float]]:
     """Interpolated (lat, lon) at time t from the best GPS source."""
     for msg, lat_f, lon_f, _alt_f in _GPS_CANDIDATES:
@@ -160,7 +216,9 @@ def generate_kml(log_data: LogData, output_path: str) -> None:
         ET.SubElement(pm, "name").text = "GPS Track"
         ET.SubElement(pm, "styleUrl").text = "#trackStyle"
         line = ET.SubElement(pm, "LineString")
-        ET.SubElement(line, "altitudeMode").text = "absolute"
+        ET.SubElement(line, "extrude").text = "1"
+        ET.SubElement(line, "tessellate").text = "1"
+        ET.SubElement(line, "altitudeMode").text = "relativeToGround"
         ET.SubElement(line, "coordinates").text = "\n".join(
             f"{lo:.8f},{la:.8f},{al:.1f}" for la, lo, al in track
         )
@@ -173,7 +231,7 @@ def generate_kml(log_data: LogData, output_path: str) -> None:
             ET.SubElement(pm, "name").text = label
             ET.SubElement(pm, "styleUrl").text = "#photoStyle"
             pt = ET.SubElement(pm, "Point")
-            ET.SubElement(pt, "altitudeMode").text = "absolute"
+            ET.SubElement(pt, "altitudeMode").text = "relativeToGround"
             ET.SubElement(pt, "coordinates").text = f"{lo:.8f},{la:.8f},{al:.1f}"
 
     tree = ET.ElementTree(kml)
@@ -215,24 +273,32 @@ def _build_map_images(
 
     photos = _extract_photo_positions(log_data) if include_photos else []
     t_start, t_end = _flight_bounds(log_data)
+    flight_dur = max(t_end - t_start, 1.0)
+    phase_dur  = flight_dur * 0.20   # first/last 20 % of flight for close-up averages
 
-    wind_takeoff = _wind_at(log_data, t_start)
-    wind_landing = _wind_at(log_data, t_end)
-    pos_takeoff  = _gps_pos_at(log_data, t_start)
-    pos_landing  = _gps_pos_at(log_data, t_end)
+    # Average wind per phase
+    avg_w_takeoff = _avg_wind(log_data, t_start, t_start + phase_dur)
+    avg_w_landing = _avg_wind(log_data, t_end - phase_dur, t_end)
+    avg_w_full    = _avg_wind(log_data, t_start, t_end)
 
-    # Wind arrows for the full-track map
-    wind_pts: list = []
-    if pos_takeoff and wind_takeoff:
-        wind_pts.append((*pos_takeoff, *wind_takeoff, "Взлёт"))
-    if pos_landing and wind_landing:
-        wind_pts.append((*pos_landing, *wind_landing, "Посадка"))
+    pos_takeoff = _gps_pos_at(log_data, t_start)
+    pos_landing = _gps_pos_at(log_data, t_end)
+
+    # Wind arrows for full-track map (one arrow per GPS position, average wind speed)
+    full_wind_pts: list = []
+    if pos_takeoff and avg_w_takeoff:
+        full_wind_pts.append((*pos_takeoff, *avg_w_takeoff, "Взлёт"))
+    if pos_landing and avg_w_landing:
+        full_wind_pts.append((*pos_landing, *avg_w_landing, "Посадка"))
+    # fallback: if only a global average is available, use it at takeoff position
+    if not full_wind_pts and pos_takeoff and avg_w_full:
+        full_wind_pts.append((*pos_takeoff, *avg_w_full, "Взлёт"))
 
     if want_full:
         img = render_map(
             track,
             photos=photos or None,
-            wind_points=wind_pts or None,
+            wind_points=full_wind_pts or None,
             target_px=1600,
         )
         if img:
@@ -243,11 +309,11 @@ def _build_map_images(
         n = len(track)
         slice_n = max(80, n // 10)
 
-        # Takeoff close-up
+        # Takeoff close-up — arrow + info-box show average wind during takeoff phase
         takeoff_track = track[:slice_n]
         to_wp: list = []
-        if pos_takeoff and wind_takeoff:
-            to_wp.append((*pos_takeoff, *wind_takeoff, "Взлёт"))
+        if pos_takeoff and avg_w_takeoff:
+            to_wp.append((*pos_takeoff, *avg_w_takeoff, "Фактический ветер"))
         img_to = render_map(takeoff_track,
                             photos=photos or None,
                             wind_points=to_wp or None,
@@ -255,11 +321,11 @@ def _build_map_images(
         if img_to:
             images["map_takeoff"] = img_to
 
-        # Landing close-up
+        # Landing close-up — average wind during landing phase
         landing_track = track[-slice_n:]
         la_wp: list = []
-        if pos_landing and wind_landing:
-            la_wp.append((*pos_landing, *wind_landing, "Посадка"))
+        if pos_landing and avg_w_landing:
+            la_wp.append((*pos_landing, *avg_w_landing, "Фактический ветер"))
         img_la = render_map(landing_track,
                             photos=photos or None,
                             wind_points=la_wp or None,

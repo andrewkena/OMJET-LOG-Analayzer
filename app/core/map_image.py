@@ -99,6 +99,59 @@ def _load_font(size: int = 13) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def _wind_dir_from(vwn: float, vwe: float) -> tuple[float, str]:
+    """Return (degrees_from, compass_label) for wind vector (VWN, VWE)."""
+    dir_from = (math.degrees(math.atan2(vwe, vwn)) + 180) % 360
+    compass = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"]
+    cp = compass[int((dir_from + 22.5) % 360 // 45)]
+    return dir_from, cp
+
+
+def _draw_wind_info_box(
+    canvas: Image.Image,
+    wind_points: list,
+) -> None:
+    """Draw average wind speed + direction info box in top-right corner.
+
+    Averages VWN/VWE across all provided wind_points so the box always
+    shows a representative value regardless of how many arrows are drawn.
+    Font is large so the text stays readable when scaled to ~500 px in PDF.
+    """
+    if not wind_points:
+        return
+    vwn_avg = sum(wp[2] for wp in wind_points) / len(wind_points)
+    vwe_avg = sum(wp[3] for wp in wind_points) / len(wind_points)
+    speed = math.hypot(vwn_avg, vwe_avg)
+    if speed < 0.05:
+        return
+
+    dir_from, cp = _wind_dir_from(vwn_avg, vwe_avg)
+    lines = [
+        f"Фактический ветер: {speed:.1f} м/с",
+        f"Направл.: {cp}  ({dir_from:.0f}°)",
+    ]
+
+    big_font = _load_font(28)
+    draw = ImageDraw.Draw(canvas)
+
+    pad = 14
+    line_boxes = [draw.textbbox((0, 0), l, font=big_font) for l in lines]
+    text_w = max(b[2] - b[0] for b in line_boxes)
+    line_h = max(b[3] - b[1] for b in line_boxes) + 6
+
+    box_w = text_w + pad * 2
+    box_h = line_h * len(lines) + pad * 2
+    img_w, img_h = canvas.size
+    x0 = img_w - box_w - 12
+    y0 = 12
+
+    draw.rectangle((x0 - 2, y0 - 2, x0 + box_w + 2, y0 + box_h + 2),
+                   fill=(0, 0, 0, 200))
+    for i, (line, bbox) in enumerate(zip(lines, line_boxes)):
+        draw.text((x0 + pad, y0 + pad + i * line_h), line,
+                  fill=_WIND, font=big_font)
+
+
 def _draw_wind_arrow(
     draw: ImageDraw.Draw,
     cx: float, cy: float,
@@ -240,5 +293,9 @@ def render_map(
     cby = min(canvas_h - 1, cby)
     if crx > clx and cby > cty:
         canvas = canvas.crop((clx, cty, crx, cby))
+
+    # Wind info box drawn after crop so it is always in the corner of the final image
+    if wind_points:
+        _draw_wind_info_box(canvas, wind_points)
 
     return canvas.convert("RGB")

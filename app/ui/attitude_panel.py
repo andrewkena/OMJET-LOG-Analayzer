@@ -270,14 +270,16 @@ class AttitudePanel(QWidget):
 
         self.roll_label = QLabel("Крен: --")
         self.pitch_label = QLabel("Тангаж: --")
-        for label in (self.roll_label, self.pitch_label):
+        self.vehicle_type_label = QLabel("Тип: Неизвестен")
+        self.vehicle_type_label.setStyleSheet("font-weight: bold;")
+        for label in (self.roll_label, self.pitch_label, self.vehicle_type_label):
             label.setAlignment(Qt.AlignHCenter)
 
         horizon_box = QVBoxLayout()
-        horizon_box.addStretch()
         horizon_box.addWidget(self.horizon, alignment=Qt.AlignHCenter)
         horizon_box.addWidget(self.roll_label, alignment=Qt.AlignHCenter)
         horizon_box.addWidget(self.pitch_label, alignment=Qt.AlignHCenter)
+        horizon_box.addWidget(self.vehicle_type_label, alignment=Qt.AlignHCenter)
         horizon_box.addStretch()
 
         self.heading_label = QLabel("Курс: --")
@@ -288,7 +290,6 @@ class AttitudePanel(QWidget):
             label.setAlignment(Qt.AlignHCenter)
 
         compass_box = QVBoxLayout()
-        compass_box.addStretch()
         compass_box.addWidget(self.compass, alignment=Qt.AlignHCenter)
         compass_box.addWidget(self.heading_label, alignment=Qt.AlignHCenter)
         compass_box.addWidget(self.bearing_label, alignment=Qt.AlignHCenter)
@@ -386,6 +387,9 @@ class AttitudePanel(QWidget):
         if len(t):
             self.set_cursor_time(t[0])
 
+    def set_vehicle_type(self, type_str: str):
+        self.vehicle_type_label.setText(f"Тип: {type_str}")
+
     def clear_data(self):
         self._t = np.array([])
         self.horizon.set_attitude(0.0, 0.0)
@@ -394,6 +398,7 @@ class AttitudePanel(QWidget):
         self.pitch_label.setText("Тангаж: --")
         self.heading_label.setText("Курс: --")
         self.bearing_label.setText("Курс на точку: --")
+        self.vehicle_type_label.setText("Тип: Неизвестен")
         self.clear_wind_data()
 
     def set_position_data(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):

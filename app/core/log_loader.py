@@ -1,12 +1,18 @@
 """Load ArduPilot dataflash (.bin/.log) and telemetry (.tlog) logs into per-message-type tables."""
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 from pymavlink import mavutil
+
+# Max records collected per message type during parsing (prevents multi-GB Python lists).
+_MAX_COLLECT = 200_000
+# Target records per type stored as numpy arrays (subsampled from collected data).
+_MAX_ROWS = 50_000
 
 # Message types treated as "events" rather than time-series data.
 EVENT_MSG_TYPES = {"ERR", "EV", "MSG", "MODE"}
@@ -113,6 +119,11 @@ def load_log(path: str | Path, progress_callback: Callable[[int], None] | None =
     min_t = None
     max_t = None
 
+    # Per-type state for doubling-reservoir adaptive subsampling.
+    # Ensures uniform coverage of the full flight even for high-frequency types.
+    _step: dict[str, int] = {}     # current keep-1-in-N step
+    _counter: dict[str, int] = {}  # total messages seen per type
+
     while True:
         msg = conn.recv_match(blocking=False)
         if msg is None:
@@ -128,27 +139,54 @@ def load_log(path: str | Path, progress_callback: Callable[[int], None] | None =
         if ts is None:
             continue
 
-        data = msg.to_dict()
-        data.pop("mavpackettype", None)
-
-        table = raw.setdefault(msg_type, {"timestamp": []})
-        table["timestamp"].append(ts)
-        for k, v in data.items():
-            if isinstance(v, (list, tuple)):
-                continue  # skip array fields for MVP
-            table.setdefault(k, []).append(v)
-
+        # Always track full time range regardless of sampling decision
         if min_t is None or ts < min_t:
             min_t = ts
         if max_t is None or ts > max_t:
             max_t = ts
 
+        # Adaptive uniform subsampling: skip if not on current step boundary
+        cnt = _counter.get(msg_type, 0) + 1
+        _counter[msg_type] = cnt
+        step = _step.get(msg_type, 1)
+        if cnt % step != 0:
+            continue
+
+        data = msg.to_dict()
+        data.pop("mavpackettype", None)
+
+        table = raw.setdefault(msg_type, {"timestamp": []})
+        curr_n = len(table["timestamp"])
+
+        if curr_n >= _MAX_COLLECT:
+            # Stored too many — thin by 2× and double the step so future
+            # messages arrive at half the rate, keeping uniform coverage.
+            new_step = step * 2
+            _step[msg_type] = new_step
+            _counter[msg_type] = 0
+            for k in list(table.keys()):
+                table[k] = table[k][::2]
+
+        table["timestamp"].append(ts)
+        for k, v in data.items():
+            if isinstance(v, (list, tuple)):
+                continue  # skip array fields
+            table.setdefault(k, []).append(v)
+
     if progress_callback is not None:
         progress_callback(100)
 
     messages: dict[str, dict[str, np.ndarray]] = {}
-    for msg_type, table in raw.items():
+    for msg_type in list(raw.keys()):
+        table = raw.pop(msg_type)   # release from raw so GC can reclaim memory type by type
         n = len(table["timestamp"])
+        if n > _MAX_ROWS:
+            step = max(1, n // _MAX_ROWS)
+            sub = {k: v[::step] for k, v in table.items()}
+            del table
+            gc.collect()            # free large Python lists before numpy allocation
+            table = sub
+            n = len(table["timestamp"])
         converted = {}
         for k, v in table.items():
             if len(v) != n:
@@ -157,6 +195,7 @@ def load_log(path: str | Path, progress_callback: Callable[[int], None] | None =
                 converted[k] = np.asarray(v, dtype=float)
             except (TypeError, ValueError):
                 converted[k] = np.asarray(v, dtype=object)
+        del table
         messages[msg_type] = converted
 
     return LogData(

@@ -486,6 +486,10 @@ class MapWidget(QWidget):
         self._t = np.array([])
         self._lat = np.array([])
         self._lon = np.array([])
+        # Subsampled versions used for JS segment calls (mode colours, wind highlight)
+        self._js_t = np.array([])
+        self._js_lat = np.array([])
+        self._js_lon = np.array([])
         self._t0 = 0.0
         self._heading_t = np.array([])
         self._heading_v = np.array([])
@@ -543,8 +547,17 @@ class MapWidget(QWidget):
 
     def set_track(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):
         self._t, self._lat, self._lon = t, lat, lon
-        coords = list(zip(lat.tolist(), lon.tolist()))
-        self._run_js(f"setTrackWithTimes({json.dumps(coords)}, {t.tolist()});")
+        # Subsample to ≤6000 points for JS; full arrays kept for Python interpolation.
+        # The subsampled arrays are also reused for mode-segment and wind-highlight
+        # JS calls so those never exceed the same size limit.
+        _MAX = 6000
+        if len(t) > _MAX:
+            idx = np.round(np.linspace(0, len(t) - 1, _MAX)).astype(int)
+            self._js_lat, self._js_lon, self._js_t = lat[idx], lon[idx], t[idx]
+        else:
+            self._js_lat, self._js_lon, self._js_t = lat, lon, t
+        coords = list(zip(self._js_lat.tolist(), self._js_lon.tolist()))
+        self._run_js(f"setTrackWithTimes({json.dumps(coords)}, {json.dumps(self._js_t.tolist())});")
         self._update_mode_segments()
         self._update_wind_highlight()
 
@@ -566,11 +579,12 @@ class MapWidget(QWidget):
         self.error_legend.setVisible(checked)
 
     def _update_wind_highlight(self):
-        if len(self._t) == 0 or len(self._wind_t) == 0:
+        if len(self._js_t) == 0 or len(self._wind_t) == 0:
             self._run_js("setWindHighlight([]);")
             return
 
-        interp_speed = np.interp(self._t, self._wind_t, self._wind_speed)
+        # Interpolate wind speed onto the JS-subsampled track timestamps
+        interp_speed = np.interp(self._js_t, self._wind_t, self._wind_speed)
         mask = interp_speed > self._max_wind
         segments_js = []
         i = 0
@@ -582,8 +596,10 @@ class MapWidget(QWidget):
                 while j < n and mask[j]:
                     j += 1
                 hi = min(n - 1, j)
-                coords = list(zip(self._lat[lo:hi + 1].tolist(), self._lon[lo:hi + 1].tolist()))
-                segments_js.append(coords)
+                segments_js.append(list(zip(
+                    self._js_lat[lo:hi + 1].tolist(),
+                    self._js_lon[lo:hi + 1].tolist(),
+                )))
                 i = j
             else:
                 i += 1
@@ -607,17 +623,17 @@ class MapWidget(QWidget):
             if name not in self._mode_colors:
                 self._mode_colors[name] = _MODE_COLOR_PALETTE[len(self._mode_colors) % len(_MODE_COLOR_PALETTE)]
 
-        end_time = float(self._t[-1])
+        end_time = float(self._js_t[-1]) if len(self._js_t) else 0.0
         segments_js = []
         for i, (t_start, name) in enumerate(events):
             t_end = events[i + 1][0] if i + 1 < len(events) else end_time
-            lo = int(np.searchsorted(self._t, t_start))
-            hi = int(np.searchsorted(self._t, t_end))
-            lo = max(0, min(lo, len(self._t) - 1))
-            hi = max(0, min(hi, len(self._t) - 1))
+            lo = int(np.searchsorted(self._js_t, t_start))
+            hi = int(np.searchsorted(self._js_t, t_end))
+            lo = max(0, min(lo, len(self._js_t) - 1))
+            hi = max(0, min(hi, len(self._js_t) - 1))
             if hi <= lo:
                 continue
-            coords = list(zip(self._lat[lo:hi + 1].tolist(), self._lon[lo:hi + 1].tolist()))
+            coords = list(zip(self._js_lat[lo:hi + 1].tolist(), self._js_lon[lo:hi + 1].tolist()))
             segments_js.append({"coords": coords, "color": self._mode_colors[name]})
 
         self._run_js(f"setModeSegments({json.dumps(segments_js)});")
