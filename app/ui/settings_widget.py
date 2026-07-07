@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal
 
-from app.core import tile_cache
+from app.core import tile_cache, i18n
 
 _CACHE_SIZE_OPTIONS = [
     ("250 МБ", 250 * 1024 * 1024),
@@ -23,23 +23,20 @@ _CACHE_SIZE_OPTIONS = [
 
 
 class SettingsWidget(QWidget):
-    """Application settings - battery configuration and preferences."""
-
-    # Signals for settings changes
     battery_cell_count_changed = Signal(int)
     battery_hv_changed = Signal(bool)
-    current_thresholds_changed = Signal(float, float)  # green, red
-    speed_thresholds_changed = Signal(float, float, float)  # min, target, max
-    max_wind_changed = Signal(float)  # max wind speed, m/s
-    efficiency_thresholds_changed = Signal(float, float, float)  # green, yellow, red (mAh)
-    theme_changed = Signal(str)  # "light", "dark", or "system"
-    timezone_changed = Signal(float)  # UTC offset in hours
-    language_changed = Signal(str)  # "ru" or "en"
+    current_thresholds_changed = Signal(float, float)
+    speed_thresholds_changed = Signal(float, float, float)
+    max_wind_changed = Signal(float)
+    efficiency_thresholds_changed = Signal(float, float, float)
+    theme_changed = Signal(str)
+    timezone_changed = Signal(float)
+    language_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._utc_offset = 0.0
-        self._language = "ru"
+        self._language = i18n.get_language()
         self._battery_cells = 8
         self._battery_hv = False
         self._current_green = 50
@@ -62,98 +59,97 @@ class SettingsWidget(QWidget):
         columns_layout.addLayout(right_layout, 1)
         layout = left_layout
 
-        # Theme selection
-        theme_group = QGroupBox("Тема приложения")
-        theme_layout = QFormLayout(theme_group)
+        # ── Theme ────────────────────────────────────────────────────────────
+        self.theme_group = QGroupBox()
+        theme_layout = QFormLayout(self.theme_group)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Светлая", "light")
-        self.theme_combo.addItem("Темная", "dark")
-        self.theme_combo.addItem("Системная", "system")
+        self.theme_combo.addItem("", "light")
+        self.theme_combo.addItem("", "dark")
+        self.theme_combo.addItem("", "system")
         self.theme_combo.setCurrentIndex(2)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        theme_layout.addRow("Тема:", self.theme_combo)
+        self.theme_label = QLabel()
+        theme_layout.addRow(self.theme_label, self.theme_combo)
 
         self.timezone_combo = QComboBox()
         for offset in range(-12, 15):
-            label = "UTC" if offset == 0 else f"UTC{offset:+d}"
-            self.timezone_combo.addItem(label, float(offset))
+            lbl = "UTC" if offset == 0 else f"UTC{offset:+d}"
+            self.timezone_combo.addItem(lbl, float(offset))
         self.timezone_combo.setCurrentIndex(self.timezone_combo.findData(0.0))
         self.timezone_combo.currentIndexChanged.connect(self._on_timezone_changed)
-        theme_layout.addRow("Часовой пояс:", self.timezone_combo)
+        self.timezone_label = QLabel()
+        theme_layout.addRow(self.timezone_label, self.timezone_combo)
 
         self.language_combo = QComboBox()
         self.language_combo.addItem("Русский", "ru")
         self.language_combo.addItem("English", "en")
-        self.language_combo.setCurrentIndex(self.language_combo.findData("ru"))
+        self.language_combo.setCurrentIndex(self.language_combo.findData(i18n.get_language()))
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
-        theme_layout.addRow("Язык:", self.language_combo)
+        self.language_label = QLabel()
+        theme_layout.addRow(self.language_label, self.language_combo)
+        layout.addWidget(self.theme_group)
 
-        layout.addWidget(theme_group)
-
-        # Notifications
-        notifications_group = QGroupBox("Уведомления")
-        notifications_layout = QVBoxLayout(notifications_group)
-        self.sound_alerts_checkbox = QCheckBox("Звуковые оповещения")
+        # ── Notifications ────────────────────────────────────────────────────
+        self.notifications_group = QGroupBox()
+        notifications_layout = QVBoxLayout(self.notifications_group)
+        self.sound_alerts_checkbox = QCheckBox()
         self.sound_alerts_checkbox.setChecked(True)
         notifications_layout.addWidget(self.sound_alerts_checkbox)
-        layout.addWidget(notifications_group)
+        layout.addWidget(self.notifications_group)
 
-        # Map tile cache
-        cache_group = QGroupBox("Кэш картографических данных")
-        cache_layout = QVBoxLayout(cache_group)
+        # ── Map tile cache ───────────────────────────────────────────────────
+        self.cache_group = QGroupBox()
+        cache_layout = QVBoxLayout(self.cache_group)
         self.cache_size_label = QLabel()
         self._update_cache_size_label()
         cache_layout.addWidget(self.cache_size_label)
 
         max_cache_row = QHBoxLayout()
-        max_cache_row.addWidget(QLabel("Максимальный объём:"))
+        self.max_cache_label = QLabel()
+        max_cache_row.addWidget(self.max_cache_label)
         self.max_cache_size_combo = QComboBox()
-        for label, value in _CACHE_SIZE_OPTIONS:
-            self.max_cache_size_combo.addItem(label, value)
-        self.max_cache_size_combo.setCurrentIndex(self.max_cache_size_combo.findData(tile_cache.DEFAULT_MAX_CACHE_BYTES))
+        for lbl, value in _CACHE_SIZE_OPTIONS:
+            self.max_cache_size_combo.addItem(lbl, value)
+        self.max_cache_size_combo.setCurrentIndex(
+            self.max_cache_size_combo.findData(tile_cache.DEFAULT_MAX_CACHE_BYTES))
         self.max_cache_size_combo.currentIndexChanged.connect(self._on_max_cache_size_changed)
         max_cache_row.addWidget(self.max_cache_size_combo)
         max_cache_row.addStretch()
         cache_layout.addLayout(max_cache_row)
 
-        self.clear_cache_button = QPushButton("Очистить кэш картографических данных")
+        self.clear_cache_button = QPushButton()
         self.clear_cache_button.clicked.connect(self._on_clear_cache_clicked)
         cache_layout.addWidget(self.clear_cache_button)
-        layout.addWidget(cache_group)
+        layout.addWidget(self.cache_group)
 
         layout = right_layout
 
-        # Battery Configuration
-        battery_group = QGroupBox("Настройка батареи")
-        battery_layout = QFormLayout(battery_group)
+        # ── Battery ──────────────────────────────────────────────────────────
+        self.battery_group = QGroupBox()
+        battery_layout = QFormLayout(self.battery_group)
 
-        # Cell count selector
         self.cell_count_combo = QComboBox()
         self.cell_count_combo.addItems(["4S", "6S", "8S", "10S", "12S"])
         self.cell_count_combo.setCurrentText("8S")
         self.cell_count_combo.currentTextChanged.connect(self._on_cell_count_changed)
-        battery_layout.addRow("Количество ячеек:", self.cell_count_combo)
+        self.cell_count_label = QLabel()
+        battery_layout.addRow(self.cell_count_label, self.cell_count_combo)
 
-        # HV checkbox for LiHV batteries
-        self.hv_checkbox = QCheckBox("LiHV (повышенное напряжение)")
-        self.hv_checkbox.setToolTip(
-            "Включить для батарей LiHV\n"
-            "Стандартный LiPo: 4.20В/ячейку (полный) / 3.60В/ячейку (пустой)\n"
-            "LiHV: 4.35В/ячейку (полный) / 3.60В/ячейку (пустой)"
-        )
+        self.hv_checkbox = QCheckBox()
         self.hv_checkbox.stateChanged.connect(self._on_hv_changed)
-        battery_layout.addRow("Тип батареи:", self.hv_checkbox)
+        self.battery_type_label = QLabel()
+        battery_layout.addRow(self.battery_type_label, self.hv_checkbox)
 
-        # Voltage thresholds info
         self.threshold_label = QLabel()
         self._update_threshold_label()
-        battery_layout.addRow("Диапазон напряжения:", self.threshold_label)
+        self.voltage_range_label = QLabel()
+        battery_layout.addRow(self.voltage_range_label, self.threshold_label)
 
-        layout.addWidget(battery_group)
+        layout.addWidget(self.battery_group)
 
-        # Color configuration
-        color_group = QGroupBox("Цветовая настройка")
-        color_layout = QFormLayout(color_group)
+        # ── Color settings ───────────────────────────────────────────────────
+        self.color_group = QGroupBox()
+        color_layout = QFormLayout(self.color_group)
 
         current_row = QHBoxLayout()
         self.current_green_spin = QSpinBox()
@@ -166,50 +162,56 @@ class SettingsWidget(QWidget):
         self.current_red_spin.setSuffix(" A")
         self.current_red_spin.setValue(self._current_red)
         self.current_red_spin.valueChanged.connect(self._on_current_thresholds_changed)
-
-        current_row.addWidget(QLabel("Зеленый:"))
+        self.current_green_label = QLabel()
+        self.current_red_label = QLabel()
+        current_row.addWidget(self.current_green_label)
         current_row.addWidget(self.current_green_spin)
-        current_row.addWidget(QLabel("Красный:"))
+        current_row.addWidget(self.current_red_label)
         current_row.addWidget(self.current_red_spin)
-        color_layout.addRow("Сила тока:", current_row)
+        self.current_row_label = QLabel()
+        color_layout.addRow(self.current_row_label, current_row)
 
         speed_row = QHBoxLayout()
         self.speed_min_spin = QSpinBox()
         self.speed_min_spin.setRange(0, 200)
-        self.speed_min_spin.setSuffix(" м/с")
+        self.speed_min_spin.setSuffix(" m/s")
         self.speed_min_spin.setValue(self._speed_min)
         self.speed_min_spin.valueChanged.connect(self._on_speed_thresholds_changed)
         self.speed_target_spin = QSpinBox()
         self.speed_target_spin.setRange(0, 200)
-        self.speed_target_spin.setSuffix(" м/с")
+        self.speed_target_spin.setSuffix(" m/s")
         self.speed_target_spin.setValue(self._speed_target)
         self.speed_target_spin.valueChanged.connect(self._on_speed_thresholds_changed)
         self.speed_max_spin = QSpinBox()
         self.speed_max_spin.setRange(0, 200)
-        self.speed_max_spin.setSuffix(" м/с")
+        self.speed_max_spin.setSuffix(" m/s")
         self.speed_max_spin.setValue(self._speed_max)
         self.speed_max_spin.valueChanged.connect(self._on_speed_thresholds_changed)
-
-        speed_row.addWidget(QLabel("Минимальная:"))
+        self.speed_min_label = QLabel()
+        self.speed_target_label = QLabel()
+        self.speed_max_label = QLabel()
+        speed_row.addWidget(self.speed_min_label)
         speed_row.addWidget(self.speed_min_spin)
-        speed_row.addWidget(QLabel("Целевая:"))
+        speed_row.addWidget(self.speed_target_label)
         speed_row.addWidget(self.speed_target_spin)
-        speed_row.addWidget(QLabel("Максимальная:"))
+        speed_row.addWidget(self.speed_max_label)
         speed_row.addWidget(self.speed_max_spin)
-        color_layout.addRow("Скорость:", speed_row)
+        self.speed_row_label = QLabel()
+        color_layout.addRow(self.speed_row_label, speed_row)
 
         self.max_wind_spin = QSpinBox()
         self.max_wind_spin.setRange(0, 100)
         self.max_wind_spin.setSuffix(" м/с")
         self.max_wind_spin.setValue(self._max_wind)
         self.max_wind_spin.valueChanged.connect(self._on_max_wind_changed)
-        color_layout.addRow("Максимальный ветер:", self.max_wind_spin)
+        self.max_wind_label = QLabel()
+        color_layout.addRow(self.max_wind_label, self.max_wind_spin)
 
-        layout.addWidget(color_group)
+        layout.addWidget(self.color_group)
 
-        # Efficiency thresholds (mAh consumption coloring in Mission Analysis)
-        efficiency_group = QGroupBox("Пороги эффективности")
-        efficiency_layout = QFormLayout(efficiency_group)
+        # ── Efficiency thresholds ────────────────────────────────────────────
+        self.efficiency_group = QGroupBox()
+        efficiency_layout = QFormLayout(self.efficiency_group)
 
         eff_row = QHBoxLayout()
         eff_row.addWidget(self._make_dot("#3cb44b"))
@@ -219,7 +221,6 @@ class SettingsWidget(QWidget):
         self.eff_green_spin.setValue(self._eff_green)
         self.eff_green_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
         eff_row.addWidget(self.eff_green_spin)
-
         eff_row.addWidget(self._make_dot("#f1c40f"))
         self.eff_yellow_spin = QSpinBox()
         self.eff_yellow_spin.setRange(0, 5000)
@@ -227,7 +228,6 @@ class SettingsWidget(QWidget):
         self.eff_yellow_spin.setValue(self._eff_yellow)
         self.eff_yellow_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
         eff_row.addWidget(self.eff_yellow_spin)
-
         eff_row.addWidget(self._make_dot("#e6194b"))
         self.eff_red_spin = QSpinBox()
         self.eff_red_spin.setRange(0, 5000)
@@ -235,101 +235,147 @@ class SettingsWidget(QWidget):
         self.eff_red_spin.setValue(self._eff_red)
         self.eff_red_spin.valueChanged.connect(self._on_efficiency_thresholds_changed)
         eff_row.addWidget(self.eff_red_spin)
+        self.eff_row_label = QLabel()
+        efficiency_layout.addRow(self.eff_row_label, eff_row)
+        layout.addWidget(self.efficiency_group)
 
-        efficiency_layout.addRow("Расход (мА·ч):", eff_row)
-        layout.addWidget(efficiency_group)
+        # ── Battery info ─────────────────────────────────────────────────────
+        self.info_group = QGroupBox()
+        info_layout = QVBoxLayout(self.info_group)
+        self.info_lipo_title = QLabel("LiPo / Li-ion:")
+        self.info_lipo_full = QLabel()
+        self.info_lipo_min = QLabel()
+        self.info_lihv_title = QLabel()
+        self.info_lihv_full = QLabel()
+        self.info_lihv_min = QLabel()
+        for lbl in (self.info_lipo_title, self.info_lipo_full, self.info_lipo_min,
+                    self.info_lihv_title, self.info_lihv_full, self.info_lihv_min):
+            info_layout.addWidget(lbl)
+        layout.addWidget(self.info_group)
 
-        # Info section
-        info_group = QGroupBox("Информация о напряжении батареи")
-        info_layout = QVBoxLayout(info_group)
-
-        info_layout.addWidget(QLabel("LiPo / Li-ion:"))
-        info_layout.addWidget(QLabel("  • Полный заряд: 4.20В на ячейку"))
-        info_layout.addWidget(QLabel("  • Безопасный минимум: 3.60В на ячейку"))
-        info_layout.addWidget(QLabel(""))
-        info_layout.addWidget(QLabel("LiHV (повышенное напряжение):"))
-        info_layout.addWidget(QLabel("  • Полный заряд: 4.35В на ячейку"))
-        info_layout.addWidget(QLabel("  • Безопасный минимум: 3.60В на ячейку"))
-
-        layout.addWidget(info_group)
         left_layout.addStretch()
         right_layout.addStretch()
 
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.theme_group.setTitle(tr("Тема приложения"))
+        self.theme_label.setText(tr("Тема:"))
+        self.theme_combo.setItemText(0, tr("Светлая"))
+        self.theme_combo.setItemText(1, tr("Темная"))
+        self.theme_combo.setItemText(2, tr("Системная"))
+        self.timezone_label.setText(tr("Часовой пояс:"))
+        self.language_label.setText(tr("Язык:"))
+        self.language_combo.setItemText(0, tr("Русский"))
+
+        self.notifications_group.setTitle(tr("Уведомления"))
+        self.sound_alerts_checkbox.setText(tr("Звуковые оповещения"))
+
+        self.cache_group.setTitle(tr("Кэш картографических данных"))
+        self.max_cache_label.setText(tr("Максимальный объём:"))
+        self.clear_cache_button.setText(tr("Очистить кэш картографических данных"))
+        self._update_cache_size_label()
+
+        self.battery_group.setTitle(tr("Настройка аккумулятора"))
+        self.cell_count_label.setText(tr("Количество ячеек:"))
+        self.hv_checkbox.setText(tr("LiHV (повышенное напряжение)"))
+        self.hv_checkbox.setToolTip(tr(
+            "Включить для LiHV аккумуляторов\n"
+            "Стандартный LiPo: 4.20В/ячейку (заряжен) / 3.60В/ячейку (разряжен)\n"
+            "LiHV: 4.35В/ячейку (заряжен) / 3.60В/ячейку (разряжен)"
+        ))
+        self.battery_type_label.setText(tr("Тип аккумулятора:"))
+        self.voltage_range_label.setText(tr("Диапазон напряжения:"))
+        self._update_threshold_label()
+
+        self.color_group.setTitle(tr("Цветовая настройка"))
+        self.current_row_label.setText(tr("Сила тока:"))
+        self.current_green_label.setText(tr("Зеленый:"))
+        self.current_red_label.setText(tr("Красный:"))
+        self.speed_row_label.setText(tr("Скорость:"))
+        self.speed_min_label.setText(tr("Минимальная:"))
+        self.speed_target_label.setText(tr("Целевая:"))
+        self.speed_max_label.setText(tr("Максимальная:"))
+        self.max_wind_label.setText(tr("Максимальный ветер:"))
+
+        self.efficiency_group.setTitle(tr("Пороги эффективности"))
+        self.eff_row_label.setText(tr("Расход (мА·ч):"))
+
+        self.info_group.setTitle(tr("Информация о напряжении"))
+        self.info_lipo_full.setText(tr("  • Полный заряд: 4.20В/ячейку"))
+        self.info_lipo_min.setText(tr("  • Минимум: 3.60В/ячейку"))
+        self.info_lihv_title.setText(tr("LiHV (повышенное напряжение):"))
+        self.info_lihv_full.setText(tr("  • Полный заряд: 4.35В/ячейку"))
+        self.info_lihv_min.setText(tr("  • Минимум: 3.60В/ячейку"))
+
     @staticmethod
     def _make_dot(color: str) -> QLabel:
-        """Create a small colored circle label (used to mark threshold inputs)."""
         dot = QLabel()
         dot.setFixedSize(12, 12)
         dot.setStyleSheet(f"background-color: {color}; border-radius: 6px;")
         return dot
 
     def _on_theme_changed(self, index: int):
-        """Handle theme selection change."""
         self.theme_changed.emit(self.theme_combo.itemData(index))
 
     def current_theme(self) -> str:
-        """Return the currently selected theme ('light', 'dark', or 'system')."""
         return self.theme_combo.currentData()
 
     def _on_timezone_changed(self, index: int):
-        """Handle timezone selection change."""
         self._utc_offset = self.timezone_combo.itemData(index)
         self.timezone_changed.emit(self._utc_offset)
 
     def get_utc_offset(self) -> float:
-        """Return the currently selected UTC offset in hours."""
         return self._utc_offset
 
     def _on_language_changed(self, index: int):
-        """Handle language selection change."""
-        self._language = self.language_combo.itemData(index)
-        self.language_changed.emit(self._language)
+        lang = self.language_combo.itemData(index)
+        self._language = lang
+        i18n.set_language(lang)
+        self.language_changed.emit(lang)
 
     def get_language(self) -> str:
-        """Return the currently selected language code ('ru' or 'en')."""
         return self._language
 
     def _on_cell_count_changed(self, text: str):
-        """Handle battery cell count change."""
         self._battery_cells = int(text.replace("S", ""))
         self.battery_cell_count_changed.emit(self._battery_cells)
 
     def _on_hv_changed(self, state: int):
-        """Handle HV checkbox change."""
-        self._battery_hv = (state == 2)  # Qt.Checked = 2
+        self._battery_hv = (state == 2)
         self.battery_hv_changed.emit(self._battery_hv)
         self._update_threshold_label()
 
     def _update_threshold_label(self):
-        """Update the voltage threshold display."""
+        per = i18n.tr("на ячейку")
         if self._battery_hv:
             self.threshold_label.setText(
                 f"<span style='color: #3cb44b;'>4.35В</span> / "
-                f"<span style='color: #e6194b;'>3.60В</span> на ячейку"
+                f"<span style='color: #e6194b;'>3.60В</span> {per}"
             )
         else:
             self.threshold_label.setText(
                 f"<span style='color: #3cb44b;'>4.20В</span> / "
-                f"<span style='color: #e6194b;'>3.60В</span> на ячейку"
+                f"<span style='color: #e6194b;'>3.60В</span> {per}"
             )
 
     def _on_current_thresholds_changed(self):
-        """Handle current color threshold change, keeping red >= green."""
         self._current_green = self.current_green_spin.value()
         self._current_red = self.current_red_spin.value()
         if self.current_red_spin.value() < self.current_green_spin.value():
             self.current_red_spin.setValue(self.current_green_spin.value())
-            return  # setValue triggers this slot again with the corrected value
+            return
         self.current_thresholds_changed.emit(float(self._current_green), float(self._current_red))
 
     def _on_speed_thresholds_changed(self):
-        """Handle speed color threshold change, keeping min <= target <= max."""
         min_v = self.speed_min_spin.value()
         target_v = self.speed_target_spin.value()
         max_v = self.speed_max_spin.value()
         if target_v < min_v:
             self.speed_target_spin.setValue(min_v)
-            return  # setValue triggers this slot again with the corrected value
+            return
         if max_v < target_v:
             self.speed_max_spin.setValue(target_v)
             return
@@ -337,29 +383,24 @@ class SettingsWidget(QWidget):
         self.speed_thresholds_changed.emit(float(min_v), float(target_v), float(max_v))
 
     def get_battery_cell_count(self) -> int:
-        """Return the currently selected battery cell count."""
         return self._battery_cells
 
     def is_hv_battery(self) -> bool:
-        """Return whether LiHV mode is enabled."""
         return self._battery_hv
 
     def get_current_thresholds(self) -> tuple[float, float]:
-        """Return the (green, red) current coloring thresholds."""
         return float(self._current_green), float(self._current_red)
 
     def get_speed_thresholds(self) -> tuple[float, float, float]:
-        """Return the (min, target, max) speed coloring thresholds."""
         return float(self._speed_min), float(self._speed_target), float(self._speed_max)
 
     def _on_efficiency_thresholds_changed(self):
-        """Handle efficiency (mAh consumption) threshold change, keeping green <= yellow <= red."""
         green_v = self.eff_green_spin.value()
         yellow_v = self.eff_yellow_spin.value()
         red_v = self.eff_red_spin.value()
         if yellow_v < green_v:
             self.eff_yellow_spin.setValue(green_v)
-            return  # setValue triggers this slot again with the corrected value
+            return
         if red_v < yellow_v:
             self.eff_red_spin.setValue(yellow_v)
             return
@@ -367,50 +408,42 @@ class SettingsWidget(QWidget):
         self.efficiency_thresholds_changed.emit(float(green_v), float(yellow_v), float(red_v))
 
     def get_efficiency_thresholds(self) -> tuple[float, float, float]:
-        """Return the (green, yellow, red) efficiency (mAh consumption) thresholds."""
         return float(self._eff_green), float(self._eff_yellow), float(self._eff_red)
 
     def _on_max_wind_changed(self, value: int):
-        """Handle max wind threshold change."""
         self._max_wind = value
         self.max_wind_changed.emit(float(self._max_wind))
 
     def get_max_wind(self) -> float:
-        """Return the max wind speed threshold (m/s) for map highlighting."""
         return float(self._max_wind)
 
     def is_sound_alerts_enabled(self) -> bool:
-        """Return whether sound alerts (e.g. on log load finished) are enabled."""
         return self.sound_alerts_checkbox.isChecked()
 
     def _update_cache_size_label(self):
-        """Refresh the displayed map tile cache size."""
         size = tile_cache.get_cache_size_bytes()
-        self.cache_size_label.setText(f"Объём картографических данных: {tile_cache.format_size(size)}")
+        self.cache_size_label.setText(
+            f"{i18n.tr('Объём картографических данных: ')}{tile_cache.format_size(size)}"
+        )
 
     def refresh_cache_size_label(self):
-        """Public hook for other widgets to refresh the cache size display."""
         self._update_cache_size_label()
 
     def set_tile_handler(self, tile_handler):
-        """Wire up the live tile scheme handler so changing the max size can
-        immediately re-check the on-disk cache against the new limit."""
         self._tile_handler = tile_handler
 
     def _on_max_cache_size_changed(self, index: int):
-        """Handle the max cache size selection change."""
         value = self.max_cache_size_combo.itemData(index)
         tile_cache.set_max_cache_size_bytes(value)
         if self._tile_handler is not None:
             self._tile_handler.recheck_cache_limit()
 
     def _on_clear_cache_clicked(self):
-        """Handle the 'clear map cache' button click."""
         tile_cache.clear_cache()
         self._update_cache_size_label()
-        QMessageBox.information(self, "Кэш карты", "Кэш картографических данных очищен.")
+        QMessageBox.information(self, i18n.tr("Кэш карты"),
+                                i18n.tr("Кэш картографических данных очищен."))
 
     def showEvent(self, event):
-        """Refresh the cache size display every time the Settings tab is shown."""
         super().showEvent(event)
         self._update_cache_size_label()

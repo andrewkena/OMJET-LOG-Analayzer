@@ -10,6 +10,7 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QAbstractItemView
 
+from app.core import i18n
 from app.core.log_loader import LogData
 from app.core.time_format import format_mmss, format_gps_time
 from app.core.event_decoder import decode_event, decode_error
@@ -114,9 +115,10 @@ class EventsWidget(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setColumnCount(5)
-        self.setHorizontalHeaderLabels(["№", "Flight time", "GPS time", "Сообщение", "Расшифровка"])
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.NoSelection)
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
         self.cellClicked.connect(self._on_cell_clicked)
         self._rows: list[dict] = []
 
@@ -145,6 +147,12 @@ class EventsWidget(QTableWidget):
                 item.setForeground(fg)
                 self.setItem(i, col, item)
         self.resizeColumnsToContents()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.setHorizontalHeaderLabels(
+            ["№", tr("Время полёта"), tr("Время GPS"), tr("Сообщение"), tr("Расшифровка")]
+        )
 
     def _on_cell_clicked(self, row: int, column: int):
         if 0 <= row < len(self._rows):

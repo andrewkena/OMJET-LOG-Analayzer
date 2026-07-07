@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QApplication, QProgressDialog,
 )
 
+from app.core import i18n
 from app.core.log_loader import LogData
 from app.core.time_format import format_mmss, format_gps_time
 
@@ -247,15 +248,16 @@ class _GeotagPreviewDialog(QDialog):
 
     def __init__(self, files: list[Path], points: list[dict], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Предпросмотр геотегирования")
+        tr = i18n.tr
+        self.setWindowTitle(tr("Предпросмотр геотегирования"))
         self.resize(520, 400)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"Будет геотегировано фотографий: {len(files)}. Проверьте соответствие:"))
+        layout.addWidget(QLabel(f"{tr('Будет геотегировано фотографий')}: {len(files)}. {tr('Проверьте соответствие:')}"))
 
         table = QTableWidget()
         table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Файл", "Широта", "Долгота", "Высота (м)"])
+        table.setHorizontalHeaderLabels([tr("Файл"), tr("Широта"), tr("Долгота"), tr("Высота (м)")])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
@@ -272,8 +274,8 @@ class _GeotagPreviewDialog(QDialog):
         layout.addWidget(table)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Геотегировать")
-        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.button(QDialogButtonBox.Ok).setText(tr("Геотегировать изображения"))
+        buttons.button(QDialogButtonBox.Cancel).setText(tr("Отмена"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -495,11 +497,11 @@ class _PhotoMapWidget(QWidget):
         self.view.loadFinished.connect(self._on_load_finished)
         self.view.setHtml(_PHOTO_MAP_HTML, QUrl("https://maps.google.com/"))
 
-        self.center_checkbox = QCheckBox("Центрировать")
+        self.center_checkbox = QCheckBox()
         self.center_checkbox.toggled.connect(self.set_follow)
         self.center_checkbox.setChecked(True)
 
-        self.fit_checkbox = QCheckBox("Показать весь трек")
+        self.fit_checkbox = QCheckBox()
         self.fit_checkbox.toggled.connect(self._on_fit_toggled)
         self.fit_checkbox.setChecked(True)
 
@@ -512,6 +514,13 @@ class _PhotoMapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
         layout.addLayout(controls)
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.center_checkbox.setText(tr("Центрировать"))
+        self.fit_checkbox.setText(tr("Показать весь трек"))
 
     def _on_load_finished(self, ok: bool):
         self._ready = ok
@@ -562,21 +571,19 @@ class _PhotoFolderPanel(QWidget):
         self._photo_gps: list[tuple | None] = []
         self._excluded: set[int] = set()
 
-        self.choose_button = QPushButton("Выбрать папку с фотографиями...")
+        self.choose_button = QPushButton()
         self.choose_button.clicked.connect(self._on_choose_clicked)
         self.geotag_source_combo = QComboBox()
-        self.geotag_source_combo.addItems(["Геометки GNSS", "Геометки с лога"])
-        self.geotag_button = QPushButton("Геотегировать изображения")
+        self.geotag_button = QPushButton()
         self.geotag_button.clicked.connect(self.geotag_requested.emit)
-        self.remove_geotags_button = QPushButton("Удалить все геопривязки")
+        self.remove_geotags_button = QPushButton()
         self.remove_geotags_button.clicked.connect(self._on_remove_all_geotags_clicked)
         self.count_label = QLabel("")
 
-        self.path_label = QLabel("Папка не выбрана")
+        self.path_label = QLabel()
         self.path_label.setWordWrap(True)
 
         self.view_combo = QComboBox()
-        self.view_combo.addItems(["Список", "Миниатюры"])
         self.view_combo.currentIndexChanged.connect(self._on_view_mode_changed)
 
         self.file_list = QListWidget()
@@ -604,7 +611,29 @@ class _PhotoFolderPanel(QWidget):
         layout.addWidget(self.file_list)
         layout.addLayout(footer_row)
 
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
         self.view_combo.setCurrentIndex(1)  # default to thumbnails
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.choose_button.setText(tr("Выбрать папку с фотографиями..."))
+        self.geotag_button.setText(tr("Геотегировать изображения"))
+        self.remove_geotags_button.setText(tr("Удалить все геопривязки"))
+        if not self.photo_files:
+            self.path_label.setText(tr("Папка не выбрана"))
+        current_idx = self.view_combo.currentIndex()
+        self.view_combo.blockSignals(True)
+        self.view_combo.clear()
+        self.view_combo.addItems([tr("Список"), tr("Миниатюры")])
+        self.view_combo.setCurrentIndex(max(0, current_idx))
+        self.view_combo.blockSignals(False)
+        current_src = self.geotag_source_combo.currentIndex()
+        self.geotag_source_combo.blockSignals(True)
+        self.geotag_source_combo.clear()
+        self.geotag_source_combo.addItems([tr("Геометки GNSS"), tr("Геометки с лога")])
+        self.geotag_source_combo.setCurrentIndex(max(0, current_src))
+        self.geotag_source_combo.blockSignals(False)
 
     def active_photo_files(self) -> list[Path]:
         return [f for i, f in enumerate(self.photo_files) if i not in self._excluded]
@@ -613,7 +642,7 @@ class _PhotoFolderPanel(QWidget):
         return "gnss" if self.geotag_source_combo.currentIndex() == 0 else "log"
 
     def _on_choose_clicked(self):
-        directory = QFileDialog.getExistingDirectory(self, "Выберите папку с фотографиями")
+        directory = QFileDialog.getExistingDirectory(self, i18n.tr("Выберите папку с фотографиями"))
         if not directory:
             return
         self.set_folder(directory)
@@ -625,7 +654,8 @@ class _PhotoFolderPanel(QWidget):
         self.photo_files = files
         self._excluded = set()
 
-        progress = QProgressDialog("Загрузка фотографий...", "Отмена", 0, len(files), self)
+        tr = i18n.tr
+        progress = QProgressDialog(tr("Загрузка фотографий..."), tr("Отмена"), 0, len(files), self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
 
@@ -634,7 +664,7 @@ class _PhotoFolderPanel(QWidget):
             if progress.wasCanceled():
                 gps.extend([None] * (len(files) - len(gps)))
                 break
-            progress.setLabelText(f"Чтение: {f.name}")
+            progress.setLabelText(tr("Чтение: ") + f.name)
             progress.setValue(i)
             QApplication.processEvents()
             gps.append(_read_gps_exif(f))
@@ -648,12 +678,13 @@ class _PhotoFolderPanel(QWidget):
         self.folder_loaded.emit(files)
 
     def _on_remove_all_geotags_clicked(self):
+        tr = i18n.tr
         if not self.photo_files:
-            QMessageBox.information(self, "Удаление геопривязок", "Сначала выберите папку с фотографиями.")
+            QMessageBox.information(self, tr("Удаление геопривязок"), tr("Сначала выберите папку с фотографиями."))
             return
 
         reply = QMessageBox.warning(
-            self, "Удаление геопривязок",
+            self, tr("Удаление геопривязок"),
             f"Координаты и высота будут безвозвратно удалены из EXIF всех {len(self.photo_files)} "
             f"открытых фотографий. Это действие нельзя отменить.\n\nПродолжить?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
@@ -661,7 +692,7 @@ class _PhotoFolderPanel(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        progress = QProgressDialog("Удаление геопривязок...", "Отмена", 0, len(self.photo_files), self)
+        progress = QProgressDialog(tr("Удаление геопривязок..."), tr("Отмена"), 0, len(self.photo_files), self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
 
@@ -669,7 +700,7 @@ class _PhotoFolderPanel(QWidget):
         for i, f in enumerate(self.photo_files):
             if progress.wasCanceled():
                 break
-            progress.setLabelText(f"Обработка: {f.name}")
+            progress.setLabelText(tr("Обработка: ") + f.name)
             progress.setValue(i)
             QApplication.processEvents()
             try:
@@ -685,23 +716,25 @@ class _PhotoFolderPanel(QWidget):
 
         if errors:
             QMessageBox.warning(
-                self, "Удаление завершено с ошибками",
+                self, tr("Удаление завершено с ошибками"),
                 f"Обработано: {len(self.photo_files) - len(errors)} из {len(self.photo_files)}.\n"
                 + "\n".join(errors[:10])
             )
         else:
-            QMessageBox.information(self, "Удаление завершено", "Геопривязка удалена из всех фотографий.")
+            QMessageBox.information(self, tr("Удаление завершено"), tr("Геопривязка удалена из всех фотографий."))
 
     def _update_count_label(self):
+        tr = i18n.tr
         total = len(self.photo_files)
         excluded = len(self._excluded)
         geotagged = sum(1 for g in self._photo_gps if g is not None)
         if excluded:
             self.count_label.setText(
-                f"Фотографий: {total - excluded} из {total} (исключено: {excluded}, геопривязанных: {geotagged})"
+                f"{tr('Фотографий')}: {total - excluded} {tr('из')} {total} "
+                f"({tr('исключено')}: {excluded}, {tr('геопривязанных')}: {geotagged})"
             )
         else:
-            self.count_label.setText(f"Фотографий: {total} (геопривязанных: {geotagged})")
+            self.count_label.setText(f"{tr('Фотографий')}: {total} ({tr('геопривязанных')}: {geotagged})")
 
     def _on_view_mode_changed(self, _index: int):
         self._populate_list()
@@ -712,7 +745,7 @@ class _PhotoFolderPanel(QWidget):
             return
         row = self.file_list.row(item)
         menu = QMenu(self)
-        action_text = "Включить фотографию" if row in self._excluded else "Исключить фотографию"
+        action_text = i18n.tr("Включить фотографию") if row in self._excluded else i18n.tr("Исключить фотографию")
         action = menu.addAction(action_text)
         chosen = menu.exec(self.file_list.viewport().mapToGlobal(pos))
         if chosen == action:
@@ -740,14 +773,14 @@ class _PhotoFolderPanel(QWidget):
         f = self.photo_files[row]
         excluded = row in self._excluded
         has_gps = self._photo_gps[row] is not None
-        if self.view_combo.currentText() == "Миниатюры":
+        if self.view_combo.currentIndex() == 1:
             item.setIcon(_thumbnail_icon(f, 96, has_gps, excluded))
         default_fg = self.file_list.palette().color(QPalette.Text)
         item.setForeground(QColor("#888888") if excluded else default_fg)
 
     def _populate_list(self):
         self.file_list.clear()
-        if self.view_combo.currentText() == "Миниатюры":
+        if self.view_combo.currentIndex() == 1:
             self.file_list.setViewMode(QListView.IconMode)
             self.file_list.setIconSize(QSize(96, 96))
             self.file_list.setGridSize(QSize(112, 120))
@@ -789,10 +822,10 @@ class PhotoGeotagWidget(QWidget):
         layout = QVBoxLayout(self)
 
         top_row = QHBoxLayout()
-        self.summary_label = QLabel("Фотографии не найдены")
-        self.import_gnss_button = QPushButton("Открыть файл геометок GNSS...")
+        self.summary_label = QLabel()
+        self.import_gnss_button = QPushButton()
         self.import_gnss_button.clicked.connect(self._on_import_gnss_clicked)
-        self.export_button = QPushButton("Экспорт в CSV")
+        self.export_button = QPushButton()
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_csv)
         top_row.addWidget(self.summary_label)
@@ -826,7 +859,7 @@ class PhotoGeotagWidget(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_log_context_menu)
 
-        self.gnss_label = QLabel("Геометки GNSS не загружены")
+        self.gnss_label = QLabel()
         self.gnss_table = QTableWidget()
         self.gnss_table.setColumnCount(len(_GNSS_COLUMNS))
         self.gnss_table.setHorizontalHeaderLabels(_GNSS_COLUMNS)
@@ -837,7 +870,7 @@ class PhotoGeotagWidget(QWidget):
         self.gnss_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.gnss_table.customContextMenuRequested.connect(self._on_gnss_context_menu)
 
-        self.log_count_label = QLabel("Геометок с лога: 0")
+        self.log_count_label = QLabel()
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -876,6 +909,21 @@ class PhotoGeotagWidget(QWidget):
         self._gnss_outliers: list[bool] = []
         self._gnss_excluded: set[int] = set()
         self._highlighted_row = -1
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.import_gnss_button.setText(tr("Открыть файл геометок GNSS..."))
+        self.export_button.setText(tr("Экспорт в CSV"))
+        if not self._rows:
+            self.summary_label.setText(tr("Фотографии не найдены"))
+        if not self._gnss_geotags:
+            self.gnss_label.setText(tr("Геометки GNSS не загружены"))
+        if not self._rows:
+            self.log_count_label.setText(f"{tr('Геометок с лога')}: 0")
+        self.table.setHorizontalHeaderLabels([tr(c) for c in _COLUMNS])
+        self.gnss_table.setHorizontalHeaderLabels([tr(c) for c in _GNSS_COLUMNS])
 
     def eventFilter(self, watched, event):
         if watched is self.table.viewport() and event.type() == event.Type.Leave:
@@ -908,9 +956,10 @@ class PhotoGeotagWidget(QWidget):
         self._points = []
         self._log_excluded = set()
         if photo_table is None or len(t) == 0:
-            self.summary_label.setText("Фотографии не найдены (нет сообщений CAM/TRIG в логе)")
+            tr = i18n.tr
+            self.summary_label.setText(tr("Фотографии не найдены (нет сообщений CAM/TRIG в логе)"))
             self.export_button.setEnabled(False)
-            self.log_count_label.setText("Геометок с лога: 0")
+            self.log_count_label.setText(f"{tr('Геометок с лога')}: 0")
             self.map.set_points([])
             return
 
@@ -954,31 +1003,33 @@ class PhotoGeotagWidget(QWidget):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(r, c, item)
 
-        self.summary_label.setText(f"Найдено фотографий: {n}")
+        self.summary_label.setText(f"{i18n.tr('Найдено фотографий')}: {n}")
         self._update_log_count_label()
         self.export_button.setEnabled(True)
         self.map.set_points(self._points)
 
     def clear(self):
+        tr = i18n.tr
         self.table.setRowCount(0)
         self._rows = []
         self._points = []
         self._log_geotags = []
         self._log_excluded = set()
-        self.summary_label.setText("Фотографии не найдены")
-        self.log_count_label.setText("Геометок с лога: 0")
+        self.summary_label.setText(tr("Фотографии не найдены"))
+        self.log_count_label.setText(f"{tr('Геометок с лога')}: 0")
         self.export_button.setEnabled(False)
         self.map.set_points([])
 
     def _update_log_count_label(self):
+        tr = i18n.tr
         total = len(self._rows)
         excluded = len(self._log_excluded)
         if excluded:
             self.log_count_label.setText(
-                f"Геометок с лога: {total - excluded} из {total} (исключено: {excluded})"
+                f"{tr('Геометок с лога')}: {total - excluded} {tr('из')} {total} ({tr('исключено')}: {excluded})"
             )
         else:
-            self.log_count_label.setText(f"Геометок с лога: {total}")
+            self.log_count_label.setText(f"{tr('Геометок с лога')}: {total}")
 
     def _active_log_geotags(self) -> list[dict]:
         return [p for i, p in enumerate(self._log_geotags) if i not in self._log_excluded]
@@ -1004,7 +1055,7 @@ class PhotoGeotagWidget(QWidget):
         if row < 0:
             return
         menu = QMenu(self)
-        action_text = "Включить точку" if row in self._log_excluded else "Исключить точку"
+        action_text = i18n.tr("Включить точку") if row in self._log_excluded else i18n.tr("Исключить точку")
         action = menu.addAction(action_text)
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == action:
@@ -1062,20 +1113,21 @@ class PhotoGeotagWidget(QWidget):
         return None, None, None
 
     def _on_import_gnss_clicked(self):
+        tr = i18n.tr
         path, _ = QFileDialog.getOpenFileName(
-            self, "Открыть файл геометок GNSS", "",
-            "Файлы геометок (*.csv *.pos *.txt);;All files (*.*)"
+            self, tr("Открыть файл геометок GNSS..."), "",
+            tr("Файлы геометок (*.csv *.pos *.txt);;All files (*.*)")
         )
         if not path:
             return
         try:
             points = self._parse_gnss_csv(path) or self._parse_rtklib_pos(path)
         except OSError as e:
-            QMessageBox.warning(self, "Ошибка чтения файла", str(e))
+            QMessageBox.warning(self, tr("Ошибка чтения файла"), str(e))
             return
         if not points:
             QMessageBox.warning(
-                self, "Не удалось распознать файл",
+                self, tr("Не удалось распознать файл"),
                 "В файле не найдены столбцы широты/долготы (Lat/Lon, Latitude/Longitude и т.п.)."
             )
             return
@@ -1108,12 +1160,15 @@ class PhotoGeotagWidget(QWidget):
         return [p for i, p in enumerate(self._gnss_geotags) if i not in self._gnss_excluded]
 
     def _update_gnss_label(self):
+        tr = i18n.tr
         total = len(self._gnss_geotags)
         excluded = len(self._gnss_excluded)
         if excluded:
-            self.gnss_label.setText(f"Геометки GNSS: {total - excluded} из {total} (исключено: {excluded})")
+            self.gnss_label.setText(
+                f"{tr('Геометки GNSS')}: {total - excluded} {tr('из')} {total} ({tr('исключено')}: {excluded})"
+            )
         else:
-            self.gnss_label.setText(f"Геометки GNSS: {total}")
+            self.gnss_label.setText(f"{tr('Геометки GNSS')}: {total}")
 
     def _apply_gnss_row_style(self, row: int):
         excluded = row in self._gnss_excluded
@@ -1140,7 +1195,7 @@ class PhotoGeotagWidget(QWidget):
         if row < 0:
             return
         menu = QMenu(self)
-        action_text = "Включить точку" if row in self._gnss_excluded else "Исключить точку"
+        action_text = i18n.tr("Включить точку") if row in self._gnss_excluded else i18n.tr("Исключить точку")
         action = menu.addAction(action_text)
         chosen = menu.exec(self.gnss_table.viewport().mapToGlobal(pos))
         if chosen == action:
@@ -1211,23 +1266,24 @@ class PhotoGeotagWidget(QWidget):
         return points
 
     def _on_geotag_clicked(self):
+        tr = i18n.tr
         files = self.photo_folder_panel.active_photo_files()
         if not files:
-            QMessageBox.information(self, "Геотегирование", "Сначала выберите папку с фотографиями.")
+            QMessageBox.information(self, tr("Геотегирование"), tr("Сначала выберите папку с фотографиями."))
             return
 
         source = self.photo_folder_panel.geotag_source()
-        source_label = "Геометки GNSS" if source == "gnss" else "Геометки с лога"
+        source_label = tr("Геометки GNSS") if source == "gnss" else tr("Геометки с лога")
         points = self._active_gnss_geotags() if source == "gnss" else self._active_log_geotags()
         if not points:
             QMessageBox.warning(
-                self, "Геотегирование",
-                "Нет точек привязки: откройте файл геометок GNSS или лог с фотографиями (CAM/TRIG)."
+                self, tr("Геотегирование"),
+                tr("Нет точек привязки: откройте файл геометок GNSS или лог с фотографиями (CAM/TRIG).")
             )
             return
 
         reply = QMessageBox.warning(
-            self, "Геотегирование",
+            self, tr("Геотегирование"),
             f"Источник координат: {source_label}.\n\n"
             "Координаты и высота будут записаны в EXIF выбранных фотографий по порядку их следования, "
             "соответствующему порядку точек привязки. Существующие GPS-данные в фотографиях будут "
@@ -1241,7 +1297,7 @@ class PhotoGeotagWidget(QWidget):
         n = min(len(files), len(points))
         if len(files) != len(points):
             reply = QMessageBox.question(
-                self, "Количество не совпадает",
+                self, tr("Количество не совпадает"),
                 f"Фотографий: {len(files)}, точек привязки: {len(points)}.\n"
                 f"Будут обработаны первые {n} по порядку. Продолжить?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -1253,7 +1309,7 @@ class PhotoGeotagWidget(QWidget):
         if preview.exec() != QDialog.Accepted:
             return
 
-        progress = QProgressDialog("Геотегирование...", "Отмена", 0, n, self)
+        progress = QProgressDialog(tr("Геотегирование") + "...", tr("Отмена"), 0, n, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
 
@@ -1262,7 +1318,7 @@ class PhotoGeotagWidget(QWidget):
             if progress.wasCanceled():
                 break
             f = files[i]
-            progress.setLabelText(f"Обработка: {f.name}")
+            progress.setLabelText(tr("Обработка: ") + f.name)
             progress.setValue(i)
             QApplication.processEvents()
             p = points[i]
@@ -1274,16 +1330,17 @@ class PhotoGeotagWidget(QWidget):
 
         if errors:
             QMessageBox.warning(
-                self, "Геотегирование завершено с ошибками",
+                self, tr("Геотегирование завершено с ошибками"),
                 f"Обработано: {n - len(errors)} из {n}.\n" + "\n".join(errors[:10])
             )
         else:
-            QMessageBox.information(self, "Геотегирование завершено", f"Координаты записаны в {n} фотографий.")
+            QMessageBox.information(self, tr("Геотегирование завершено"), f"Координаты записаны в {n} фотографий.")
 
     def _export_csv(self):
         if not self._rows:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт геотегов фотографий", "", "CSV files (*.csv)")
+        tr = i18n.tr
+        path, _ = QFileDialog.getSaveFileName(self, tr("Экспорт геотегов фотографий"), "", tr("CSV files (*.csv)"))
         if not path:
             return
         with open(path, "w", newline="", encoding="utf-8-sig") as f:

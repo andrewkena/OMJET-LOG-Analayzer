@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QToolButton, QHeaderView, QMenu, QInputDialog,
 )
 
-from app.core import favorites_store
+from app.core import favorites_store, i18n
 from app.core.log_loader import LogData
 
 _STAR_ACTIVE_STYLE = "QToolButton { border: none; color: #ffd700; font-size: 14px; }"
@@ -41,6 +41,7 @@ class MessageTree(QWidget):
         self.favorites_tree.customContextMenuRequested.connect(self._on_favorites_context_menu)
         self.tree = self._make_tree("Параметры")
         self.presets_tree = self._make_presets_tree("Пресеты")
+        i18n.register(self._retranslateUi)
 
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(self.favorites_tree)
@@ -57,6 +58,12 @@ class MessageTree(QWidget):
         self._renames: dict[tuple[str, str], str] = favorites_store.load_renames()
         self._leaf_items: dict[tuple[str, str], list[QTreeWidgetItem]] = {}
         self._star_buttons: dict[tuple[str, str], list[QToolButton]] = {}
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.favorites_tree.setHeaderLabels([tr("Избранное"), ""])
+        self.tree.setHeaderLabels([tr("Параметры"), ""])
+        self.presets_tree.setHeaderLabels([tr("Пресеты")])
 
     def _make_tree(self, header: str) -> QTreeWidget:
         tree = QTreeWidget()
@@ -199,10 +206,10 @@ class MessageTree(QWidget):
             if key is None:
                 return
             menu = QMenu(self)
-            rename_action = menu.addAction("Переименовать параметр")
+            rename_action = menu.addAction(i18n.tr("Переименовать параметр"))
             rename_action.triggered.connect(lambda: self._rename_favorite(key))
             if key in self._renames:
-                restore_action = menu.addAction("Вернуть оригинальное имя параметра")
+                restore_action = menu.addAction(i18n.tr("Вернуть оригинальное имя параметра"))
                 restore_action.triggered.connect(lambda: self._restore_favorite_name(key))
             menu.exec(self.favorites_tree.viewport().mapToGlobal(pos))
             return
@@ -210,7 +217,7 @@ class MessageTree(QWidget):
         if not self._favorites:
             return
         menu = QMenu(self)
-        clear_action = menu.addAction("Очистить избранное")
+        clear_action = menu.addAction(i18n.tr("Очистить избранное"))
         clear_action.triggered.connect(self._clear_favorites)
         menu.exec(self.favorites_tree.viewport().mapToGlobal(pos))
 

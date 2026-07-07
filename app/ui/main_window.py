@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 
-from app.core import tile_cache
+from app.core import tile_cache, i18n
 from app.core.log_loader import LogData
 from app.core.log_load_worker import LogLoadWorker
 from app.ui.message_tree import MessageTree
@@ -138,11 +138,12 @@ class MainWindow(QMainWindow):
             self.settings_widget.set_tile_handler(self._tile_handler)
 
     def _on_cache_limit_exceeded(self):
+        tr = i18n.tr
         box = QMessageBox(self)
-        box.setWindowTitle("Кэш карты")
-        box.setText("Объём картографических данных превышен")
-        delete_button = box.addButton("Удалить данные", QMessageBox.AcceptRole)
-        box.addButton("Закрыть", QMessageBox.RejectRole)
+        box.setWindowTitle(tr("Кэш карты"))
+        box.setText(tr("Объём картографических данных превышен"))
+        delete_button = box.addButton(tr("Удалить данные"), QMessageBox.AcceptRole)
+        box.addButton(tr("Закрыть"), QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() == delete_button:
             tile_cache.clear_cache()
@@ -153,12 +154,10 @@ class MainWindow(QMainWindow):
         self.message_tree.field_toggled.connect(self._on_field_toggled)
         self.message_tree.preset_activated.connect(self._on_preset_activated)
 
-        self.open_log_button = QPushButton("Открыть лог-файл")
+        self.open_log_button = QPushButton()
         self.open_log_button.clicked.connect(self.open_log_dialog)
         self.open_log_help_label = QLabel("?")
-        self.open_log_help_label.setToolTip(
-            "Поддерживаемые файлы: ArduPilot dataflash (*.bin, *.log), телеметрия (*.tlog)"
-        )
+        self.open_log_help_label.setToolTip("")
         self.open_log_help_label.setStyleSheet(
             "QLabel { border: 1px solid gray; border-radius: 8px; padding: 0px 5px; }"
         )
@@ -181,22 +180,25 @@ class MainWindow(QMainWindow):
         self.graphs[2].plot_widget.setXLink(self.graphs[0].plot_widget)
 
         self.target_graph_combo = QComboBox()
-        self.target_graph_combo.addItems([f"График {i + 1}" for i in range(len(self.graphs))])
 
         graph_tab = QWidget()
         graph_tab_layout = QVBoxLayout(graph_tab)
         graph_tab_layout.setContentsMargins(4, 4, 4, 4)
         target_row = QHBoxLayout()
-        target_row.addWidget(QLabel(f"Добавить параметр в поле графика (до {MAX_CURVES} параметров на один график):"))
+        self.add_param_label = QLabel()
+        target_row.addWidget(self.add_param_label)
         target_row.addWidget(self.target_graph_combo)
         target_row.addStretch()
         graph_tab_layout.addLayout(target_row)
         graph_splitter = QSplitter(Qt.Vertical)
+        self.graph_labels: list[QLabel] = []
         for i, graph in enumerate(self.graphs):
             wrapper = QWidget()
             wrapper_layout = QVBoxLayout(wrapper)
             wrapper_layout.setContentsMargins(0, 0, 0, 0)
-            wrapper_layout.addWidget(QLabel(f"График {i + 1}"))
+            lbl = QLabel()
+            self.graph_labels.append(lbl)
+            wrapper_layout.addWidget(lbl)
             wrapper_layout.addWidget(graph)
             graph_splitter.addWidget(wrapper)
         graph_tab_layout.addWidget(graph_splitter)
@@ -207,18 +209,21 @@ class MainWindow(QMainWindow):
         self.timeline_widget.cursor_changed.connect(self._on_cursor_moved)
         self.timeline_widget.range_changed.connect(self._on_range_changed)
 
-        self.backplay_button = QPushButton("◀ Backplay")
+        self.backplay_button = QPushButton()
         self.backplay_button.clicked.connect(self._on_backplay_clicked)
-        self.play_button = QPushButton("▶ Play")
+        self.play_button = QPushButton()
         self.play_button.clicked.connect(self._on_play_clicked)
-        self.pause_button = QPushButton("⏸ Pause")
+        self.pause_button = QPushButton()
         self.pause_button.clicked.connect(self._on_pause_clicked)
-        self.stop_button = QPushButton("⏹ Stop")
+        self.stop_button = QPushButton()
         self.stop_button.clicked.connect(self._on_stop_clicked)
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["x0.25", "x0.5", "x1", "x2", "x4", "x10", "x20"])
         self.speed_combo.setCurrentText("x1")
         self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
+
+        self.speed_label = QLabel()
+        self.basemap_type_label = QLabel()
 
         playback_row = QHBoxLayout()
         playback_row.addStretch()
@@ -232,7 +237,7 @@ class MainWindow(QMainWindow):
         playback_row.addWidget(self.play_button)
         playback_row.addWidget(self.pause_button)
         playback_row.addWidget(self.stop_button)
-        playback_row.addWidget(QLabel("Скорость:"))
+        playback_row.addWidget(self.speed_label)
         playback_row.addWidget(self.speed_combo)
         playback_row.addSpacing(20)
         basemap_separator = QFrame()
@@ -240,7 +245,7 @@ class MainWindow(QMainWindow):
         basemap_separator.setFrameShadow(QFrame.Sunken)
         playback_row.addWidget(basemap_separator)
         playback_row.addWidget(self.map_widget.basemap_checkbox)
-        playback_row.addWidget(QLabel("Тип:"))
+        playback_row.addWidget(self.basemap_type_label)
         playback_row.addWidget(self.map_widget.basemap_combo)
         playback_row.addSpacing(20)
         follow_separator = QFrame()
@@ -286,20 +291,23 @@ class MainWindow(QMainWindow):
         self.mission_analysis_widget = MissionAnalysisWidget()
         self.photo_geotag_widget = PhotoGeotagWidget()
 
-        right_tabs = QTabWidget()
-        right_tabs.addTab(map_tab, "Карта")
-        right_tabs.addTab(graph_tab, "Графики")
-        right_tabs.addTab(self.mission_analysis_widget, "Анализ миссии")
-        right_tabs.addTab(self.events_widget, "События")
-        right_tabs.addTab(self.params_widget, "Параметры полетного контроллера")
-        right_tabs.addTab(self.mission_widget, "Полетное задание")
-        right_tabs.addTab(self.photo_geotag_widget, "Геотегирование фотографий")
-        right_tabs.addTab(self.settings_widget, "Настройки")
-        right_tabs.setCurrentIndex(0)
+        self.right_tabs = QTabWidget()
+        self.right_tabs.addTab(map_tab, "")
+        self.right_tabs.addTab(graph_tab, "")
+        self.right_tabs.addTab(self.mission_analysis_widget, "")
+        self.right_tabs.addTab(self.events_widget, "")
+        self.right_tabs.addTab(self.params_widget, "")
+        self.right_tabs.addTab(self.mission_widget, "")
+        self.right_tabs.addTab(self.photo_geotag_widget, "")
+        self.right_tabs.addTab(self.settings_widget, "")
+        self.right_tabs.setCurrentIndex(0)
+
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(message_tree_panel)
-        splitter.addWidget(right_tabs)
+        splitter.addWidget(self.right_tabs)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([225, 1175])
@@ -327,6 +335,35 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
         layout.addLayout(bottom_row)
         self.setCentralWidget(container)
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.open_log_button.setText(tr("Открыть лог-файл"))
+        self.open_log_help_label.setToolTip(tr("Поддерживаемые файлы: ArduPilot dataflash (*.bin, *.log), телеметрия (*.tlog)"))
+        self.add_param_label.setText(
+            tr("Добавить параметр в поле графика (до {n} параметров на один график):").replace("{n}", str(MAX_CURVES))
+        )
+        for i, lbl in enumerate(self.graph_labels):
+            lbl.setText(f"{tr('График')} {i + 1}")
+        self.target_graph_combo.blockSignals(True)
+        current_idx = self.target_graph_combo.currentIndex()
+        self.target_graph_combo.clear()
+        self.target_graph_combo.addItems([f"{tr('График')} {i + 1}" for i in range(len(self.graphs))])
+        self.target_graph_combo.setCurrentIndex(max(0, current_idx))
+        self.target_graph_combo.blockSignals(False)
+        self.backplay_button.setText(tr("◀ Назад"))
+        self.play_button.setText(tr("▶ Воспроизвести"))
+        self.pause_button.setText(tr("⏸ Пауза"))
+        self.stop_button.setText(tr("⏹ Стоп"))
+        self.speed_label.setText(tr("Скорость:"))
+        self.basemap_type_label.setText(tr("Тип:"))
+        _tab_titles = [
+            "Карта", "Графики", "Анализ миссии", "События",
+            "Параметры полетного контроллера", "Полетное задание",
+            "Геотегирование фотографий", "Настройки",
+        ]
+        for i, title in enumerate(_tab_titles):
+            self.right_tabs.setTabText(i, tr(title))
 
     def open_log_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -371,6 +408,7 @@ class MainWindow(QMainWindow):
         self.events_widget.load(self.log_data)
         self.params_widget.load(self.log_data)
         self.mission_widget.load(self.log_data)
+        self.mission_analysis_widget.set_log_path(path)
         self.mission_analysis_widget.load(self.log_data)
         self.photo_geotag_widget.load(self.log_data)
         self._load_gps_track()

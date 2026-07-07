@@ -5,8 +5,11 @@ photo count and per-battery mAh consumed.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel, QPushButton,
+)
 
+from app.core import i18n
 from app.core.log_loader import LogData
 from app.core.time_format import format_mmss, format_gps_time
 from app.ui.battery_widget import BatteryWidget, _battery_instance_table
@@ -99,85 +102,135 @@ class MissionAnalysisWidget(QWidget):
         self._eff_values: dict[str, float | None] = {
             "overall_km": None, "overall_min": None, "forward_km": None, "forward_min": None,
         }
+        self._log_path: str | None = None
+        self._last_log_data: object = None
         layout = QVBoxLayout(self)
 
-        time_group = QGroupBox("Время")
-        time_layout = QFormLayout(time_group)
+        self.time_group = QGroupBox()
+        self.time_layout = QFormLayout(self.time_group)
         self.start_label = QLabel("—")
         self.end_label = QLabel("—")
         self.duration_label = QLabel("—")
-        time_layout.addRow("Время начала миссии:", self.start_label)
-        time_layout.addRow("Время окончания:", self.end_label)
-        time_layout.addRow("Продолжительность:", self.duration_label)
+        self.time_layout.addRow(" ", self.start_label)
+        self.time_layout.addRow(" ", self.end_label)
+        self.time_layout.addRow(" ", self.duration_label)
 
-        flight_group = QGroupBox("Полет")
-        flight_layout = QFormLayout(flight_group)
+        self.flight_group = QGroupBox()
+        self.flight_layout = QFormLayout(self.flight_group)
         self.distance_label = QLabel("—")
         self.vertical_motor_time_label = QLabel("—")
         self.forward_motor_time_label = QLabel("—")
         self.planning_time_label = QLabel("—")
-        flight_layout.addRow("Пройденное расстояние:", self.distance_label)
-        flight_layout.addRow("Время работы вертикальных моторов:", self.vertical_motor_time_label)
-        flight_layout.addRow("Время работы ходового мотора:", self.forward_motor_time_label)
-        flight_layout.addRow("Время планирования (без моторов):", self.planning_time_label)
+        self.flight_layout.addRow(" ", self.distance_label)
+        self.flight_layout.addRow(" ", self.vertical_motor_time_label)
+        self.flight_layout.addRow(" ", self.forward_motor_time_label)
+        self.flight_layout.addRow(" ", self.planning_time_label)
 
-        wind_group = QGroupBox("Ветер")
-        wind_layout = QFormLayout(wind_group)
+        self.wind_group = QGroupBox()
+        self.wind_layout = QFormLayout(self.wind_group)
         self.avg_wind_label = QLabel("—")
         self.max_wind_label = QLabel("—")
         self.wind_dir_label = QLabel("—")
-        wind_layout.addRow("Средний ветер:", self.avg_wind_label)
-        wind_layout.addRow("Максимальный ветер:", self.max_wind_label)
-        wind_layout.addRow("Преобладающее направление ветра:", self.wind_dir_label)
+        self.wind_layout.addRow(" ", self.avg_wind_label)
+        self.wind_layout.addRow(" ", self.max_wind_label)
+        self.wind_layout.addRow(" ", self.wind_dir_label)
 
-        attitude_group = QGroupBox("Углы")
-        attitude_layout = QFormLayout(attitude_group)
+        self.attitude_group = QGroupBox()
+        self.attitude_layout = QFormLayout(self.attitude_group)
         self.max_roll_label = QLabel("—")
         self.max_pitch_label = QLabel("—")
-        attitude_layout.addRow("Максимальный крен:", self.max_roll_label)
-        attitude_layout.addRow("Максимальный тангаж:", self.max_pitch_label)
+        self.attitude_layout.addRow(" ", self.max_roll_label)
+        self.attitude_layout.addRow(" ", self.max_pitch_label)
 
-        photo_group = QGroupBox("Фотосъемка")
-        photo_layout = QFormLayout(photo_group)
+        self.photo_group = QGroupBox()
+        self.photo_layout = QFormLayout(self.photo_group)
         self.cam_count_label = QLabel("—")
         self.trig_count_label = QLabel("—")
         self.avg_photo_time_label = QLabel("—")
         self.avg_photo_distance_label = QLabel("—")
-        photo_layout.addRow("Количество фотоимпульсов отправленных в камеры:", self.cam_count_label)
-        photo_layout.addRow("Количество фотоимпульсов полученных от камеры:", self.trig_count_label)
-        photo_layout.addRow("Среднее время между фотоснимками:", self.avg_photo_time_label)
-        photo_layout.addRow("Среднее расстояние между фотоснимками:", self.avg_photo_distance_label)
+        self.photo_layout.addRow(" ", self.cam_count_label)
+        self.photo_layout.addRow(" ", self.trig_count_label)
+        self.photo_layout.addRow(" ", self.avg_photo_time_label)
+        self.photo_layout.addRow(" ", self.avg_photo_distance_label)
 
-        efficiency_group = QGroupBox("Эффективность")
-        efficiency_layout = QFormLayout(efficiency_group)
+        self.efficiency_group = QGroupBox()
+        self.efficiency_layout = QFormLayout(self.efficiency_group)
         self.overall_mah_per_km_label, self.overall_mah_per_km_dot, overall_km_row = self._make_efficiency_row()
         self.overall_mah_per_min_label, self.overall_mah_per_min_dot, overall_min_row = self._make_efficiency_row()
         self.forward_mah_per_km_label, self.forward_mah_per_km_dot, forward_km_row = self._make_efficiency_row()
         self.forward_mah_per_min_label, self.forward_mah_per_min_dot, forward_min_row = self._make_efficiency_row()
-        efficiency_layout.addRow("Общий расход на километр:", overall_km_row)
-        efficiency_layout.addRow("Общий расход на минуту:", overall_min_row)
-        efficiency_layout.addRow("Горизонтальный расход на километр:", forward_km_row)
-        efficiency_layout.addRow("Горизонтальный расход на минуту:", forward_min_row)
+        self.efficiency_layout.addRow(" ", overall_km_row)
+        self.efficiency_layout.addRow(" ", overall_min_row)
+        self.efficiency_layout.addRow(" ", forward_km_row)
+        self.efficiency_layout.addRow(" ", forward_min_row)
 
         self.battery_widget = BatteryWidget()
 
+        self.report_button = QPushButton()
+        self.report_button.setEnabled(False)
+        self.report_button.clicked.connect(self._open_report_dialog)
+
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
         columns_layout = QHBoxLayout()
         left_column = QVBoxLayout()
-        left_column.addWidget(time_group)
-        left_column.addWidget(flight_group)
-        left_column.addWidget(wind_group)
-        left_column.addWidget(attitude_group)
-        left_column.addWidget(photo_group)
+        left_column.addWidget(self.time_group)
+        left_column.addWidget(self.flight_group)
+        left_column.addWidget(self.wind_group)
+        left_column.addWidget(self.attitude_group)
+        left_column.addWidget(self.photo_group)
         left_column.addStretch()
 
         right_column = QVBoxLayout()
-        right_column.addWidget(efficiency_group)
+        right_column.addWidget(self.efficiency_group)
         right_column.addWidget(self.battery_widget)
         right_column.addStretch()
 
         columns_layout.addLayout(left_column)
         columns_layout.addLayout(right_column)
         layout.addLayout(columns_layout)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self.report_button)
+        layout.addLayout(btn_row)
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.time_group.setTitle(tr("Время"))
+        self.time_layout.labelForField(self.start_label).setText(tr("Время начала миссии:"))
+        self.time_layout.labelForField(self.end_label).setText(tr("Время окончания:"))
+        self.time_layout.labelForField(self.duration_label).setText(tr("Продолжительность:"))
+
+        self.flight_group.setTitle(tr("Полет"))
+        self.flight_layout.labelForField(self.distance_label).setText(tr("Пройденное расстояние:"))
+        self.flight_layout.labelForField(self.vertical_motor_time_label).setText(tr("Время работы вертикальных моторов:"))
+        self.flight_layout.labelForField(self.forward_motor_time_label).setText(tr("Время работы ходового мотора:"))
+        self.flight_layout.labelForField(self.planning_time_label).setText(tr("Время планирования (без моторов):"))
+
+        self.wind_group.setTitle(tr("Ветер"))
+        self.wind_layout.labelForField(self.avg_wind_label).setText(tr("Средний ветер:"))
+        self.wind_layout.labelForField(self.max_wind_label).setText(tr("Максимальный ветер:"))
+        self.wind_layout.labelForField(self.wind_dir_label).setText(tr("Преобладающее направление ветра:"))
+
+        self.attitude_group.setTitle(tr("Углы"))
+        self.attitude_layout.labelForField(self.max_roll_label).setText(tr("Максимальный крен:"))
+        self.attitude_layout.labelForField(self.max_pitch_label).setText(tr("Максимальный тангаж:"))
+
+        self.photo_group.setTitle(tr("Фотосъемка"))
+        self.photo_layout.labelForField(self.cam_count_label).setText(tr("Количество фотоимпульсов отправленных в камеры:"))
+        self.photo_layout.labelForField(self.trig_count_label).setText(tr("Количество фотоимпульсов полученных от камеры:"))
+        self.photo_layout.labelForField(self.avg_photo_time_label).setText(tr("Среднее время между фотоснимками:"))
+        self.photo_layout.labelForField(self.avg_photo_distance_label).setText(tr("Среднее расстояние между фотоснимками:"))
+
+        self.efficiency_group.setTitle(tr("Эффективность"))
+        self.efficiency_layout.labelForField(self.overall_mah_per_km_label.parent()).setText(tr("Общий расход на километр:"))
+        self.efficiency_layout.labelForField(self.overall_mah_per_min_label.parent()).setText(tr("Общий расход на минуту:"))
+        self.efficiency_layout.labelForField(self.forward_mah_per_km_label.parent()).setText(tr("Горизонтальный расход на километр:"))
+        self.efficiency_layout.labelForField(self.forward_mah_per_min_label.parent()).setText(tr("Горизонтальный расход на минуту:"))
+
+        self.report_button.setText(tr("Сформировать отчёт"))
 
     @staticmethod
     def _make_efficiency_row() -> tuple[QLabel, QLabel, QWidget]:
@@ -227,7 +280,12 @@ class MissionAnalysisWidget(QWidget):
             rgb = self._efficiency_rgb(value)
             dot.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border-radius: 6px;")
 
+    def set_log_path(self, path: str) -> None:
+        self._log_path = path
+
     def load(self, log_data: LogData):
+        self._last_log_data = log_data
+        self.report_button.setEnabled(True)
         start_t, end_t = self._mission_bounds(log_data)
         self.start_label.setText(format_gps_time(start_t))
         self.end_label.setText(format_gps_time(end_t))
@@ -494,3 +552,53 @@ class MissionAnalysisWidget(QWidget):
         avg_time = float(np.mean(np.diff(t)))
         avg_distance = _haversine_distance_m(lat, lon) / (len(t) - 1)
         return cam_count, trig_count, avg_time, avg_distance
+
+    def _collect_stats(self) -> dict:
+        """Snapshot of all currently displayed stats for the report dialog."""
+        bw = self.battery_widget
+        batteries = []
+        for idx, (mah_lbl, max_lbl, avg_lbl) in enumerate(
+            (
+                (bw.bat1_mah_label, bw.bat1_max_curr_label, bw.bat1_avg_curr_label),
+                (bw.bat2_mah_label, bw.bat2_max_curr_label, bw.bat2_avg_curr_label),
+            ),
+            start=1,
+        ):
+            if mah_lbl.text() != "—":
+                batteries.append(
+                    {"index": idx, "mah": mah_lbl.text(),
+                     "max_curr": max_lbl.text(), "avg_curr": avg_lbl.text()}
+                )
+        return {
+            "start_time": self.start_label.text(),
+            "end_time": self.end_label.text(),
+            "duration": self.duration_label.text(),
+            "distance": self.distance_label.text(),
+            "vertical_motor_time": self.vertical_motor_time_label.text(),
+            "forward_motor_time": self.forward_motor_time_label.text(),
+            "planning_time": self.planning_time_label.text(),
+            "avg_wind": self.avg_wind_label.text(),
+            "max_wind": self.max_wind_label.text(),
+            "wind_dir": self.wind_dir_label.text(),
+            "max_roll": self.max_roll_label.text(),
+            "max_pitch": self.max_pitch_label.text(),
+            "cam_count": self.cam_count_label.text(),
+            "trig_count": self.trig_count_label.text(),
+            "avg_photo_time": self.avg_photo_time_label.text(),
+            "avg_photo_distance": self.avg_photo_distance_label.text(),
+            "overall_mah_per_km": self.overall_mah_per_km_label.text(),
+            "overall_mah_per_min": self.overall_mah_per_min_label.text(),
+            "forward_mah_per_km": self.forward_mah_per_km_label.text(),
+            "forward_mah_per_min": self.forward_mah_per_min_label.text(),
+            "batteries": batteries,
+        }
+
+    def _open_report_dialog(self):
+        from app.ui.report_dialog import ReportDialog
+        dlg = ReportDialog(
+            self._last_log_data,
+            self._log_path or "",
+            self._collect_stats(),
+            self,
+        )
+        dlg.exec()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QFormLayout, QLabel
 
+from app.core import i18n
 from app.core.log_loader import LogData
 
 
@@ -26,27 +27,40 @@ class BatteryWidget(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
 
-        bat1_group = QGroupBox("Батарея 1")
-        bat1_form = QFormLayout(bat1_group)
+        self.bat1_group = QGroupBox()
+        self.bat1_form = QFormLayout(self.bat1_group)
         self.bat1_mah_label = QLabel("—")
         self.bat1_max_curr_label = QLabel("—")
         self.bat1_avg_curr_label = QLabel("—")
-        bat1_form.addRow("Потрачено мА·ч:", self.bat1_mah_label)
-        bat1_form.addRow("Максимальный ток:", self.bat1_max_curr_label)
-        bat1_form.addRow("Средний ток:", self.bat1_avg_curr_label)
-        layout.addWidget(bat1_group)
+        self.bat1_form.addRow(" ", self.bat1_mah_label)
+        self.bat1_form.addRow(" ", self.bat1_max_curr_label)
+        self.bat1_form.addRow(" ", self.bat1_avg_curr_label)
+        layout.addWidget(self.bat1_group)
 
-        bat2_group = QGroupBox("Батарея 2")
-        bat2_form = QFormLayout(bat2_group)
+        self.bat2_group = QGroupBox()
+        self.bat2_form = QFormLayout(self.bat2_group)
         self.bat2_mah_label = QLabel("—")
         self.bat2_max_curr_label = QLabel("—")
         self.bat2_avg_curr_label = QLabel("—")
-        bat2_form.addRow("Потрачено мА·ч:", self.bat2_mah_label)
-        bat2_form.addRow("Максимальный ток:", self.bat2_max_curr_label)
-        bat2_form.addRow("Средний ток:", self.bat2_avg_curr_label)
-        layout.addWidget(bat2_group)
+        self.bat2_form.addRow(" ", self.bat2_mah_label)
+        self.bat2_form.addRow(" ", self.bat2_max_curr_label)
+        self.bat2_form.addRow(" ", self.bat2_avg_curr_label)
+        layout.addWidget(self.bat2_group)
 
         layout.addStretch()
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.bat1_group.setTitle(tr("Батарея 1"))
+        self.bat1_form.labelForField(self.bat1_mah_label).setText(tr("Потрачено мА·ч:"))
+        self.bat1_form.labelForField(self.bat1_max_curr_label).setText(tr("Максимальный ток:"))
+        self.bat1_form.labelForField(self.bat1_avg_curr_label).setText(tr("Средний ток:"))
+        self.bat2_group.setTitle(tr("Батарея 2"))
+        self.bat2_form.labelForField(self.bat2_mah_label).setText(tr("Потрачено мА·ч:"))
+        self.bat2_form.labelForField(self.bat2_max_curr_label).setText(tr("Максимальный ток:"))
+        self.bat2_form.labelForField(self.bat2_avg_curr_label).setText(tr("Средний ток:"))
 
     def load(self, log_data: LogData):
         bat_table = log_data.messages.get("BAT")

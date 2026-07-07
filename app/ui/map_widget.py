@@ -12,6 +12,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel
 
+from app.core import i18n
 from app.core.time_format import format_mmss
 
 
@@ -358,7 +359,7 @@ function setMission(coords) {
 
 class MapWidget(QWidget):
     cursor_time_changed = Signal(float)
-    _BASEMAP_TYPES = [("Спутник", "s"), ("Гибрид", "y"), ("Карта", "m"), ("Рельеф", "p")]
+    _BASEMAP_TYPES = [("Спутник", "s"), ("Гибрид", "y"), ("Карта ГШ", "m"), ("Рельеф", "p")]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -377,47 +378,45 @@ class MapWidget(QWidget):
         self.view.loadFinished.connect(self._on_load_finished)
         self.view.setHtml(_HTML, QUrl("https://maps.google.com/"))
 
-        self.basemap_checkbox = QCheckBox("Подложка")
+        self.basemap_checkbox = QCheckBox()
         self.basemap_checkbox.setChecked(True)
         self.basemap_checkbox.toggled.connect(self.set_basemap_visible)
 
         self.basemap_combo = QComboBox()
-        for label, code in self._BASEMAP_TYPES:
-            self.basemap_combo.addItem(label, code)
+        for lbl, code in self._BASEMAP_TYPES:
+            self.basemap_combo.addItem(lbl, code)
         self.basemap_combo.currentIndexChanged.connect(self._on_basemap_combo_changed)
 
-        self.follow_checkbox = QCheckBox("Центрировать")
+        self.follow_checkbox = QCheckBox()
         self.follow_checkbox.toggled.connect(self.set_follow)
 
-        self.show_photos_checkbox = QCheckBox("Отобразить фотографии")
+        self.show_photos_checkbox = QCheckBox()
         self.show_photos_checkbox.setChecked(True)
         self.show_photos_checkbox.toggled.connect(self.set_photo_markers_visible)
 
-        self.photo_count_label = QLabel("Количество фотографий нет")
+        self.photo_count_label = QLabel()
         self.photo_count_label.setStyleSheet("color: white;")
+        self._photo_count_cam: int | None = None
+        self._photo_count_trig: int | None = None
 
         self.photo_count_help_label = QLabel("?")
-        self.photo_count_help_label.setToolTip(
-            "<span style='color:#ffeb3b;'>&#9632;</span> &mdash; количество отправленных фотоимпульсов в камеру<br>"
-            "<span style='color:#3cb44b;'>&#9632;</span> &mdash; количество полученных фотоимпульсов от камеры"
-        )
         self.photo_count_help_label.setStyleSheet(
             "QLabel { border: 1px solid gray; border-radius: 8px; padding: 0px 5px; color: white; }"
         )
 
-        self.icon_size_label = QLabel("Размер иконки:")
+        self.icon_size_label = QLabel()
         self.icon_size_label.setStyleSheet("color: white;")
         self.icon_size_combo = QComboBox()
         self.icon_size_combo.addItems(["x0.5", "x1", "x2", "x5"])
         self.icon_size_combo.setCurrentText("x1")
         self.icon_size_combo.currentTextChanged.connect(self._on_icon_size_changed)
 
-        self.show_errors_checkbox = QCheckBox("Ошибки")
+        self.show_errors_checkbox = QCheckBox()
         self.show_errors_checkbox.setChecked(True)
         self.show_errors_checkbox.toggled.connect(self.set_error_markers_visible)
         self.show_errors_checkbox.toggled.connect(self._on_show_errors_toggled)
 
-        self.show_wind_checkbox = QCheckBox("Ветер")
+        self.show_wind_checkbox = QCheckBox()
         self.show_wind_checkbox.setChecked(True)
         self.show_wind_checkbox.toggled.connect(self.set_wind_panel_visible)
 
@@ -443,9 +442,10 @@ class MapWidget(QWidget):
         error_legend_layout = QVBoxLayout(self.error_legend)
         error_legend_layout.setContentsMargins(8, 6, 8, 6)
         error_legend_layout.setSpacing(4)
-        title = QLabel("Ошибки и сбои")
-        title.setStyleSheet("color: white; font-weight: bold;")
-        error_legend_layout.addWidget(title)
+        self._error_legend_title = QLabel()
+        self._error_legend_title.setStyleSheet("color: white; font-weight: bold;")
+        error_legend_layout.addWidget(self._error_legend_title)
+        self._error_legend_labels = []
         for color, text in (("#000000", "Фэйлсейф"), ("#ff8c00", "Ассистент"), ("#e6194b", "Ошибка")):
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -457,12 +457,13 @@ class MapWidget(QWidget):
             )
             swatch.setAlignment(Qt.AlignCenter)
             swatch.setText("!")
-            label = QLabel(text)
+            label = QLabel()
             label.setStyleSheet("color: white;")
             row.addWidget(swatch)
             row.addWidget(label)
             row.addStretch()
             error_legend_layout.addLayout(row)
+            self._error_legend_labels.append((text, label))
         self.error_legend.adjustSize()
         self.error_legend.setVisible(self.show_errors_checkbox.isChecked())
 
@@ -473,11 +474,11 @@ class MapWidget(QWidget):
         wind_panel_layout = QVBoxLayout(self.wind_panel)
         wind_panel_layout.setContentsMargins(8, 6, 8, 6)
         wind_panel_layout.setSpacing(2)
-        wind_title = QLabel("Допустимый ветер")
-        wind_title.setStyleSheet("color: white; font-weight: bold;")
+        self._wind_title_label = QLabel()
+        self._wind_title_label.setStyleSheet("color: white; font-weight: bold;")
         self.wind_value_label = QLabel(f"{self._max_wind:.0f} м/с")
         self.wind_value_label.setStyleSheet("color: white;")
-        wind_panel_layout.addWidget(wind_title)
+        wind_panel_layout.addWidget(self._wind_title_label)
         wind_panel_layout.addWidget(self.wind_value_label)
         self.wind_panel.adjustSize()
         self.wind_panel.setVisible(self.show_wind_checkbox.isChecked())
@@ -497,6 +498,33 @@ class MapWidget(QWidget):
         self._position_wind_panel()
         self.error_legend.raise_()
         self.wind_panel.raise_()
+
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.basemap_checkbox.setText(tr("Подложка"))
+        for i, (lbl, _) in enumerate(self._BASEMAP_TYPES):
+            self.basemap_combo.setItemText(i, tr(lbl))
+        self.follow_checkbox.setText(tr("Центрировать"))
+        self.show_photos_checkbox.setText(tr("Отобразить фотографии"))
+        self.icon_size_label.setText(tr("Размер иконки:"))
+        self.show_errors_checkbox.setText(tr("Ошибки"))
+        self.show_wind_checkbox.setText(tr("Ветер"))
+        self._error_legend_title.setText(tr("Ошибки и сбои"))
+        for ru_text, label in self._error_legend_labels:
+            label.setText(tr(ru_text))
+        self._wind_title_label.setText(tr("Допустимый ветер"))
+        self.photo_count_help_label.setToolTip(
+            f"<span style='color:#ffeb3b;'>&#9632;</span> &mdash; "
+            f"{tr('количество отправленных фотоимпульсов в камеру')}<br>"
+            f"<span style='color:#3cb44b;'>&#9632;</span> &mdash; "
+            f"{tr('количество полученных фотоимпульсов от камеры')}"
+        )
+        self.set_photo_counts(self._photo_count_cam, self._photo_count_trig)
+        self.error_legend.adjustSize()
+        self.wind_panel.adjustSize()
 
     def _on_load_finished(self, ok: bool):
         self._ready = ok
@@ -695,15 +723,18 @@ class MapWidget(QWidget):
         self._run_js("setHighlight([]);")
 
     def set_photo_counts(self, cam_count: int | None, trig_count: int | None):
+        self._photo_count_cam = cam_count
+        self._photo_count_trig = trig_count
+        tr = i18n.tr
         if not cam_count and not trig_count:
-            self.photo_count_label.setText("Количество фотографий нет")
+            self.photo_count_label.setText(tr("Количество фотографий нет"))
             return
         parts = []
         if cam_count:
             parts.append(f"<span style='color:#ffeb3b;'>&#9632;</span> {cam_count}")
         if trig_count:
             parts.append(f"<span style='color:#3cb44b;'>&#9632;</span> {trig_count}")
-        self.photo_count_label.setText("Количество фотографий " + "&nbsp;&nbsp;&nbsp;".join(parts))
+        self.photo_count_label.setText(tr("Количество фотографий ") + "&nbsp;&nbsp;&nbsp;".join(parts))
 
     def _on_icon_size_changed(self, text: str):
         scale = float(text.lstrip("x"))

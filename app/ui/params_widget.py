@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QPushButton, QFileDialog, QMessageBox
 )
 
+from app.core import i18n
 from app.core.log_loader import LogData
 
 _COLUMN_COUNT = 6
@@ -22,10 +23,9 @@ class ParamsWidget(QWidget):
         self._rows: list[dict] = []
 
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Filter parameters...")
         self.filter_edit.textChanged.connect(self._apply_filter)
 
-        self.download_button = QPushButton("Download Parameters (.param)")
+        self.download_button = QPushButton()
         self.download_button.clicked.connect(self._on_download_clicked)
 
         top_row = QHBoxLayout()
@@ -37,7 +37,6 @@ class ParamsWidget(QWidget):
         for _ in range(_COLUMN_COUNT):
             table = QTableWidget()
             table.setColumnCount(3)
-            table.setHorizontalHeaderLabels(["№", "Parameter", "Value"])
             table.verticalHeader().setVisible(False)
             table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -49,6 +48,15 @@ class ParamsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(top_row)
         layout.addLayout(columns_layout)
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.filter_edit.setPlaceholderText(tr("Фильтр параметров..."))
+        self.download_button.setText(tr("Скачать параметры (.param)"))
+        for table in self.tables:
+            table.setHorizontalHeaderLabels(["№", tr("Параметр"), tr("Значение")])
 
     def load(self, log_data: LogData):
         self._rows = log_data.parameters()
@@ -81,12 +89,13 @@ class ParamsWidget(QWidget):
         self._populate(filtered)
 
     def _on_download_clicked(self):
+        tr = i18n.tr
         if not self._rows:
-            QMessageBox.information(self, "No parameters", "No parameters loaded.")
+            QMessageBox.information(self, tr("Нет параметров"), tr("Параметры не загружены."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Parameters", "parameters.param",
-            "ArduPilot parameter files (*.param *.parm);;All Files (*)"
+            self, tr("Сохранить параметры"), "parameters.param",
+            tr("Файлы параметров ArduPilot (*.param *.parm);;Все файлы (*)")
         )
         if not path:
             return

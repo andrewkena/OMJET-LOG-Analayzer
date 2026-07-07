@@ -24,11 +24,12 @@ from PySide6.QtWidgets import (
 )
 from pymavlink import mavutil
 
+from app.core import i18n
 from app.core.log_loader import LogData
 
 _LAT_FIELDS = ["Lat", "lat", "x"]
 _LON_FIELDS = ["Lng", "Lon", "lon", "y"]
-_COLUMNS = ["Command", "Lat", "Lng", "Alt", "Frame", "Params", "Seq", "Cmd ID", "Description"]
+_COLUMNS_RU = ["Команда", "Широта", "Долгота", "Высота м", "Рамка", "Параметры кmd", "Сиквенс", "ID команды", "Описание"]
 
 _MAV_CMD = mavutil.mavlink.enums.get("MAV_CMD", {})
 
@@ -299,15 +300,14 @@ class MissionWidget(QWidget):
         self._marker_to_row: dict[int, int] = {}
         self._highlighted_row = -1
 
-        self.download_button = QPushButton("Download Mission (.waypoints)")
+        self.download_button = QPushButton()
         self.download_button.clicked.connect(self._on_download_clicked)
 
         self.map = _MissionMapWidget()
         self.map.marker_hovered.connect(self._on_marker_hovered)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(len(_COLUMNS))
-        self.table.setHorizontalHeaderLabels(_COLUMNS)
+        self.table.setColumnCount(len(_COLUMNS_RU))
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setWordWrap(True)
@@ -315,6 +315,9 @@ class MissionWidget(QWidget):
         self.table.viewport().setMouseTracking(True)
         self.table.cellEntered.connect(self._on_table_cell_entered)
         self.table.viewport().installEventFilter(self)
+
+        i18n.register(self._retranslateUi)
+        self._retranslateUi()
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.map)
@@ -326,6 +329,15 @@ class MissionWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.download_button)
         layout.addWidget(splitter)
+
+    def _retranslateUi(self):
+        tr = i18n.tr
+        self.download_button.setText(tr("Скачать миссию (.waypoints)"))
+        self.table.setHorizontalHeaderLabels(
+            [tr(c) for c in _COLUMNS_RU]
+        )
+        self.map.center_checkbox.setText(tr("Центрировать"))
+        self.map.fit_checkbox.setText(tr("Показать весь трек"))
 
     def eventFilter(self, watched, event):
         if watched is self.table.viewport() and event.type() == event.Type.Leave:
@@ -423,12 +435,13 @@ class MissionWidget(QWidget):
         return self._waypoints
 
     def _on_download_clicked(self):
+        tr = i18n.tr
         if not self._export_rows:
-            QMessageBox.information(self, "No mission", "No mission waypoints loaded.")
+            QMessageBox.information(self, tr("Нет миссии"), tr("Точки миссии не загружены."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Mission", "mission.waypoints",
-            "Waypoint files (*.waypoints);;All Files (*)"
+            self, tr("Сохранить миссию"), "mission.waypoints",
+            tr("Файлы точек маршрута (*.waypoints);;Все файлы (*)")
         )
         if not path:
             return
