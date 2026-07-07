@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.log_loader import LogData
+from app.core.time_format import format_gps_datetime
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GPS / wind extraction helpers
@@ -250,7 +251,7 @@ def _build_map_images(
         img_to = render_map(takeoff_track,
                             photos=photos or None,
                             wind_points=to_wp or None,
-                            target_px=1100, padding_frac=0.25)
+                            target_px=1600, padding_frac=0.25)
         if img_to:
             images["map_takeoff"] = img_to
 
@@ -262,7 +263,7 @@ def _build_map_images(
         img_la = render_map(landing_track,
                             photos=photos or None,
                             wind_points=la_wp or None,
-                            target_px=1100, padding_frac=0.25)
+                            target_px=1600, padding_frac=0.25)
         if img_la:
             images["map_landing"] = img_la
 
@@ -304,38 +305,25 @@ def _build_html(
     def row(label: str, value: str) -> str:
         return f"<tr><td>{label}</td><td>{value}</td></tr>"
 
-    # ── map image sections (immediately after title) ───────────────────────────
+    _PB = "page-break-before: always;"   # CSS page-break shorthand
+
+    # ── общая карта сразу под заголовком (без переноса страницы) ─────────────
 
     if "map_full" in image_keys:
         parts += [
             "<h2>Карта трека</h2>",
-            "<img src='img://map_full' width='560'/>",
+            "<img src='img://map_full' width='500'/>",
             "<p class='cap'>&#9679; Взлёт (зелёный) &nbsp; &#9679; Посадка (красный)"
             " &nbsp; &#9658; Ветер при взлёте/посадке</p>",
         ]
-
-    if "map_takeoff" in image_keys or "map_landing" in image_keys:
-        parts.append("<h2>Взлёт и посадка (крупно)</h2>")
-        parts.append("<table width='100%'><tr>")
-        if "map_takeoff" in image_keys:
-            parts.append(
-                "<td align='center'><img src='img://map_takeoff' width='265'/>"
-                "<br/><small>Взлёт</small></td>"
-            )
-        if "map_landing" in image_keys:
-            parts.append(
-                "<td align='center'><img src='img://map_landing' width='265'/>"
-                "<br/><small>Посадка</small></td>"
-            )
-        parts.append("</tr></table>")
 
     # ── text data sections ────────────────────────────────────────────────────
 
     if "time" in sections:
         parts += [
             "<h2>Время</h2><table>",
-            row("Время начала миссии:", stats.get("start_time", "—")),
-            row("Время окончания:", stats.get("end_time", "—")),
+            row("Время начала миссии:", format_gps_datetime(stats.get("start_epoch", 0))),
+            row("Время окончания:", format_gps_datetime(stats.get("end_epoch", 0))),
             row("Продолжительность:", stats.get("duration", "—")),
             "</table>",
         ]
@@ -399,6 +387,22 @@ def _build_html(
                     row("Средний ток:", bat.get("avg_curr", "—")),
                     "</table>",
                 ]
+
+    # ── zoom-карты после текста (каждая на новой странице) ───────────────────
+
+    if "map_takeoff" in image_keys:
+        parts += [
+            f"<h2 style='{_PB}'>Взлёт (крупно)</h2>",
+            "<img src='img://map_takeoff' width='500'/>",
+            "<p class='cap'>&#9679; Взлёт (зелёный) &nbsp; &#9658; Ветер при взлёте</p>",
+        ]
+
+    if "map_landing" in image_keys:
+        parts += [
+            f"<h2 style='{_PB}'>Посадка (крупно)</h2>",
+            "<img src='img://map_landing' width='500'/>",
+            "<p class='cap'>&#9679; Посадка (красный) &nbsp; &#9658; Ветер при посадке</p>",
+        ]
 
     # ── footer ────────────────────────────────────────────────────────────────
 

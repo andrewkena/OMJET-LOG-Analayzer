@@ -104,6 +104,8 @@ class MissionAnalysisWidget(QWidget):
         }
         self._log_path: str | None = None
         self._last_log_data: object = None
+        self._start_t: float = 0.0
+        self._end_t: float = 0.0
         layout = QVBoxLayout(self)
 
         self.time_group = QGroupBox()
@@ -287,6 +289,8 @@ class MissionAnalysisWidget(QWidget):
         self._last_log_data = log_data
         self.report_button.setEnabled(True)
         start_t, end_t = self._mission_bounds(log_data)
+        self._start_t = start_t
+        self._end_t = end_t
         self.start_label.setText(format_gps_time(start_t))
         self.end_label.setText(format_gps_time(end_t))
         self.duration_label.setText(format_mmss(end_t - start_t))
@@ -572,6 +576,8 @@ class MissionAnalysisWidget(QWidget):
         return {
             "start_time": self.start_label.text(),
             "end_time": self.end_label.text(),
+            "start_epoch": self._start_t,
+            "end_epoch": self._end_t,
             "duration": self.duration_label.text(),
             "distance": self.distance_label.text(),
             "vertical_motor_time": self.vertical_motor_time_label.text(),

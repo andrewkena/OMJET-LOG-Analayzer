@@ -32,3 +32,12 @@ def format_gps_time(epoch_seconds: float) -> str:
         return datetime.fromtimestamp(epoch_seconds, tz=tz).strftime("%H:%M:%S")
     except (OverflowError, OSError, ValueError):
         return "--:--:--"
+
+
+def format_gps_datetime(epoch_seconds: float) -> str:
+    """Full date and time for an absolute log timestamp, shifted by the configured UTC offset."""
+    try:
+        tz = timezone(timedelta(hours=_utc_offset_hours))
+        return datetime.fromtimestamp(epoch_seconds, tz=tz).strftime("%d.%m.%Y %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return "--.--.---- --:--:--"
