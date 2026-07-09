@@ -110,13 +110,9 @@ def _wind_dir_from(vwn: float, vwe: float) -> tuple[float, str]:
 def _draw_wind_info_box(
     canvas: Image.Image,
     wind_points: list,
+    font_size: int = 16,
 ) -> None:
-    """Draw average wind speed + direction info box in top-right corner.
-
-    Averages VWN/VWE across all provided wind_points so the box always
-    shows a representative value regardless of how many arrows are drawn.
-    Font is large so the text stays readable when scaled to ~500 px in PDF.
-    """
+    """Draw average wind speed + direction info box in top-right corner."""
     if not wind_points:
         return
     vwn_avg = sum(wp[2] for wp in wind_points) / len(wind_points)
@@ -131,23 +127,23 @@ def _draw_wind_info_box(
         f"Направл.: {cp}  ({dir_from:.0f}°)",
     ]
 
-    big_font = _load_font(28)
+    big_font = _load_font(font_size)
     draw = ImageDraw.Draw(canvas)
 
-    pad = 14
+    pad = max(6, font_size // 2)
+    # +15% safety margin: Cyrillic glyphs can exceed measured textbbox width
     line_boxes = [draw.textbbox((0, 0), l, font=big_font) for l in lines]
-    text_w = max(b[2] - b[0] for b in line_boxes)
-    line_h = max(b[3] - b[1] for b in line_boxes) + 6
+    text_w = int(max(b[2] for b in line_boxes) * 1.15)
+    line_h = max(b[3] - b[1] for b in line_boxes) + max(2, font_size // 8)
 
     box_w = text_w + pad * 2
     box_h = line_h * len(lines) + pad * 2
     img_w, img_h = canvas.size
-    x0 = img_w - box_w - 12
+    x0 = max(0, img_w - box_w - 16)
     y0 = 12
 
-    draw.rectangle((x0 - 2, y0 - 2, x0 + box_w + 2, y0 + box_h + 2),
-                   fill=(0, 0, 0, 200))
-    for i, (line, bbox) in enumerate(zip(lines, line_boxes)):
+    draw.rectangle((x0, y0, x0 + box_w, y0 + box_h), fill=(0, 0, 0, 120))
+    for i, line in enumerate(lines):
         draw.text((x0 + pad, y0 + pad + i * line_h), line,
                   fill=_WIND, font=big_font)
 
@@ -159,6 +155,7 @@ def _draw_wind_arrow(
     label: str = "",
     length: int = 60,
     font: Optional[ImageFont.ImageFont] = None,
+    img_w: int = 0,
 ) -> None:
     """Draw a wind-direction arrow (points *to* where wind goes) at (cx, cy)."""
     speed = math.hypot(vwn, vwe)
@@ -185,6 +182,12 @@ def _draw_wind_arrow(
 
     text = f"{label}: {speed:.1f} м/с" if label else f"{speed:.1f} м/с"
     tx, ty = x1 + 7, y1 - 12
+    # Shift left if text would overflow right image edge
+    if img_w > 0 and font is not None:
+        tb = draw.textbbox((0, 0), text, font=font)
+        tw = tb[2] + 10  # +10 safety margin
+        if tx + tw > img_w:
+            tx = max(0, img_w - tw)
     for ddx, ddy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
         draw.text((tx + ddx, ty + ddy), text, fill=_BLACK, font=font)
     draw.text((tx, ty), text, fill=_WHITE, font=font)
@@ -198,19 +201,26 @@ def render_map(
     padding_frac: float = 0.15,
     target_px: int = 900,
     zoom_override: Optional[int] = None,
+    max_zoom: int = 19,
+    min_span_deg: float = 0.0,
+    center_point: Optional[tuple[float, float]] = None,
+    fixed_span_deg: float = 0.0,
+    pdf_display_width: int = 0,
 ) -> Optional[Image.Image]:
     """
     Render a static satellite map with GPS track overlay.
 
     Parameters
     ----------
-    track       : [(lat, lon, alt_m), ...]
-    photos      : [(lat, lon, alt_m, label), ...] – yellow dots
-    wind_points : [(lat, lon, vwn, vwe, label), ...] – wind arrows
-    lyrs        : Google Maps layer code: 's'=satellite, 'y'=hybrid, 'm'=road
-    padding_frac: fraction of bbox size added as padding on each side
-    target_px   : largest acceptable canvas dimension before choosing lower zoom
-    zoom_override: force a specific zoom level
+    track         : [(lat, lon, alt_m), ...]
+    photos        : [(lat, lon, alt_m, label), ...] – yellow dots
+    wind_points   : [(lat, lon, vwn, vwe, label), ...] – wind arrows
+    lyrs          : Google Maps layer code: 's'=satellite, 'y'=hybrid, 'm'=road
+    padding_frac  : fraction of bbox size added as padding on each side
+    target_px     : largest acceptable canvas dimension before choosing lower zoom
+    zoom_override : force a specific zoom level
+    center_point  : (lat, lon) – if set with fixed_span_deg, centers the view here
+    fixed_span_deg: if > 0 and center_point set, use fixed bbox (ignores track extent)
 
     Returns
     -------
@@ -221,20 +231,34 @@ def render_map(
 
     lats = [p[0] for p in track]
     lons = [p[1] for p in track]
-    lat_min, lat_max = min(lats), max(lats)
-    lon_min, lon_max = min(lons), max(lons)
 
-    lat_span = max(lat_max - lat_min, 1e-4)
-    lon_span = max(lon_max - lon_min, 1e-4)
-    lat_pad = lat_span * padding_frac
-    lon_pad = lon_span * padding_frac
-    lat_min -= lat_pad; lat_max += lat_pad
-    lon_min -= lon_pad; lon_max += lon_pad
+    if center_point is not None and fixed_span_deg > 0.0:
+        # Expand bbox to the union of fixed span around center AND actual track extent.
+        # This guarantees the center point is always visible AND the full track is shown.
+        clat, clon = center_point
+        half = fixed_span_deg / 2.0
+        lat_min = min(min(lats), clat - half)
+        lat_max = max(max(lats), clat + half)
+        lon_min = min(min(lons), clon - half)
+        lon_max = max(max(lons), clon + half)
+        lat_pad = (lat_max - lat_min) * 0.05
+        lon_pad = (lon_max - lon_min) * 0.05
+        lat_min -= lat_pad; lat_max += lat_pad
+        lon_min -= lon_pad; lon_max += lon_pad
+    else:
+        lat_min, lat_max = min(lats), max(lats)
+        lon_min, lon_max = min(lons), max(lons)
+        lat_span = max(lat_max - lat_min, min_span_deg, 1e-4)
+        lon_span = max(lon_max - lon_min, min_span_deg, 1e-4)
+        lat_pad = lat_span * padding_frac
+        lon_pad = lon_span * padding_frac
+        lat_min -= lat_pad; lat_max += lat_pad
+        lon_min -= lon_pad; lon_max += lon_pad
 
     zoom = (
         zoom_override
         if zoom_override is not None
-        else _choose_zoom(lat_min, lat_max, lon_min, lon_max, target_px)
+        else min(max_zoom, _choose_zoom(lat_min, lat_max, lon_min, lon_max, target_px))
     )
 
     tx0, ty0 = _tile_xy(lat_max, lon_min, zoom)
@@ -283,7 +307,8 @@ def render_map(
     # Wind direction arrows
     if wind_points:
         for la, lo, vwn, vwe, lbl in wind_points:
-            _draw_wind_arrow(draw, *cv(la, lo), vwn, vwe, lbl, font=font)
+            _draw_wind_arrow(draw, *cv(la, lo), vwn, vwe, lbl, font=font,
+                             img_w=canvas_w)
 
     # Crop to padded bounding box
     clx, cty = cv(lat_max, lon_min)
@@ -294,8 +319,14 @@ def render_map(
     if crx > clx and cby > cty:
         canvas = canvas.crop((clx, cty, crx, cby))
 
-    # Wind info box drawn after crop so it is always in the corner of the final image
+    # Wind info box drawn after crop so it is always in the corner of the final image.
+    # Normalize font size so the box appears the same physical size in the PDF regardless
+    # of map resolution: target ~14 px visible in the PDF at pdf_display_width.
     if wind_points:
-        _draw_wind_info_box(canvas, wind_points)
+        if pdf_display_width > 0:
+            box_font = max(10, round(14 * canvas.size[0] / pdf_display_width))
+        else:
+            box_font = 16
+        _draw_wind_info_box(canvas, wind_points, font_size=box_font)
 
     return canvas.convert("RGB")

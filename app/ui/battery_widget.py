@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QFormLayout, QLab
 from app.core import i18n
 from app.core.log_loader import LogData
 
+_RUNNING_PWM = 1050.0  # PWM above which a motor is considered spinning
+
 
 def _battery_instance_table(bat_table, bat2_table, instance: int):
     if bat_table:
@@ -62,19 +64,26 @@ class BatteryWidget(QWidget):
         self.bat2_form.labelForField(self.bat2_max_curr_label).setText(tr("Максимальный ток:"))
         self.bat2_form.labelForField(self.bat2_avg_curr_label).setText(tr("Средний ток:"))
 
-    def load(self, log_data: LogData):
+    def load(self, log_data: LogData,
+             vert_motors: list[tuple[np.ndarray, np.ndarray]] | None = None,
+             fwd_motor: tuple[np.ndarray, np.ndarray] | None = None):
         bat_table = log_data.messages.get("BAT")
         bat2_table = log_data.messages.get("BAT2")
 
-        for instance, mah_label, max_label, avg_label in (
-            (0, self.bat1_mah_label, self.bat1_max_curr_label, self.bat1_avg_curr_label),
-            (1, self.bat2_mah_label, self.bat2_max_curr_label, self.bat2_avg_curr_label),
+        # Battery 1 powers the forward (Throttle) motor → gate by fwd_motor
+        gate_bat1 = [fwd_motor] if fwd_motor is not None else None
+        # Battery 2 powers vertical motors (Motor1-4) → gate by vert_motors
+        gate_bat2 = vert_motors
+
+        for instance, mah_lbl, max_lbl, avg_lbl, gate in (
+            (0, self.bat1_mah_label, self.bat1_max_curr_label, self.bat1_avg_curr_label, gate_bat1),
+            (1, self.bat2_mah_label, self.bat2_max_curr_label, self.bat2_avg_curr_label, gate_bat2),
         ):
             sub = _battery_instance_table(bat_table, bat2_table, instance)
-            mah, max_curr, avg_curr = self._stats(sub)
-            mah_label.setText(f"{mah:.0f} мА·ч" if mah is not None else "—")
-            max_label.setText(f"{max_curr:.1f} А" if max_curr is not None else "—")
-            avg_label.setText(f"{avg_curr:.1f} А" if avg_curr is not None else "—")
+            mah, max_curr, avg_curr = self._stats(sub, gate)
+            mah_lbl.setText(f"{mah:.0f} мА·ч" if mah is not None else "—")
+            max_lbl.setText(f"{max_curr:.1f} А" if max_curr is not None else "—")
+            avg_lbl.setText(f"{avg_curr:.1f} А" if avg_curr is not None else "—")
 
     def clear(self):
         for label in (
@@ -83,7 +92,9 @@ class BatteryWidget(QWidget):
         ):
             label.setText("—")
 
-    def _stats(self, sub) -> tuple[float | None, float | None, float | None]:
+    def _stats(self, sub,
+               gate: list[tuple[np.ndarray, np.ndarray]] | None = None,
+               ) -> tuple[float | None, float | None, float | None]:
         if not sub:
             return None, None, None
 
@@ -98,8 +109,19 @@ class BatteryWidget(QWidget):
 
         max_curr = avg_curr = None
         if "Curr" in sub and len(sub["Curr"]):
-            curr = sub["Curr"]
+            t = np.asarray(sub["timestamp"], dtype=float)
+            curr = np.asarray(sub["Curr"], dtype=float)
             max_curr = float(np.max(curr))
-            avg_curr = float(np.mean(curr))
+
+            if gate:
+                mask = np.zeros(len(t), dtype=bool)
+                for mt, mpwm in gate:
+                    mt = np.asarray(mt, dtype=float)
+                    mpwm = np.asarray(mpwm, dtype=float)
+                    mask |= np.interp(t, mt, mpwm) > _RUNNING_PWM
+                if mask.any():
+                    avg_curr = float(np.mean(curr[mask]))
+            else:
+                avg_curr = float(np.mean(curr))
 
         return mah, max_curr, avg_curr

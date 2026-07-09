@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
 
 from app.core import i18n
 from app.core.log_loader import LogData
-from app.core.time_format import format_mmss, format_gps_time
+from app.core.time_format import format_mmss, format_gps_time, format_gps_date
 from app.ui.battery_widget import BatteryWidget, _battery_instance_table
 
 # Same candidate lists used elsewhere in the app (main_window.py) for
 # resolving fields across different log dialects/firmware versions.
 _GPS_LAT_CANDIDATES = [("GPS", "Lat", "Lng"), ("GPS", "Lat", "Lon"), ("GLOBAL_POSITION_INT", "lat", "lon")]
+_BARO_ALT_CANDIDATES = [("BARO", "Alt"), ("CTUN", "BarAlt"), ("CTUN", "Alt")]
+_GPS_AMSL_CANDIDATES = [("GPS", "Alt")]  # ArduPilot GPS.Alt is metres MSL
 _ATTITUDE_CANDIDATES = [
     ("ATT", "Roll", "Pitch", "Yaw", False),
     ("ATTITUDE", "roll", "pitch", "yaw", True),
@@ -36,6 +38,8 @@ _EARTH_RADIUS_M = 6371000.0
 _EFF_GREEN_RGB = (60, 180, 75)
 _EFF_YELLOW_RGB = (241, 196, 15)
 _EFF_RED_RGB = (230, 25, 75)
+_COG_GREEN_RGB = (60, 180, 75)
+_COG_RED_RGB = (230, 25, 75)
 
 
 def _haversine_distance_m(lat: np.ndarray, lon: np.ndarray) -> float:
@@ -102,6 +106,12 @@ class MissionAnalysisWidget(QWidget):
         self._eff_values: dict[str, float | None] = {
             "overall_km": None, "overall_min": None, "forward_km": None, "forward_min": None,
         }
+        self._cog_neutral_min = -3.0
+        self._cog_neutral_max = 3.0
+        self._cog_front_red = 10.0
+        self._cog_rear_red = -10.0
+        self._cog_overall_value: float | None = None
+        self._cog_fwd_value: float | None = None
         self._log_path: str | None = None
         self._last_log_data: object = None
         self._start_t: float = 0.0
@@ -110,9 +120,11 @@ class MissionAnalysisWidget(QWidget):
 
         self.time_group = QGroupBox()
         self.time_layout = QFormLayout(self.time_group)
+        self.mission_date_label = QLabel("—")
         self.start_label = QLabel("—")
         self.end_label = QLabel("—")
         self.duration_label = QLabel("—")
+        self.time_layout.addRow(" ", self.mission_date_label)
         self.time_layout.addRow(" ", self.start_label)
         self.time_layout.addRow(" ", self.end_label)
         self.time_layout.addRow(" ", self.duration_label)
@@ -141,8 +153,11 @@ class MissionAnalysisWidget(QWidget):
         self.attitude_layout = QFormLayout(self.attitude_group)
         self.max_roll_label = QLabel("—")
         self.max_pitch_label = QLabel("—")
-        self.attitude_layout.addRow(" ", self.max_roll_label)
-        self.attitude_layout.addRow(" ", self.max_pitch_label)
+        self.avg_roll_label = QLabel("—")
+        self.avg_pitch_label = QLabel("—")
+        for lbl in (self.max_roll_label, self.max_pitch_label,
+                    self.avg_roll_label, self.avg_pitch_label):
+            self.attitude_layout.addRow(" ", lbl)
 
         self.photo_group = QGroupBox()
         self.photo_layout = QFormLayout(self.photo_group)
@@ -154,6 +169,38 @@ class MissionAnalysisWidget(QWidget):
         self.photo_layout.addRow(" ", self.trig_count_label)
         self.photo_layout.addRow(" ", self.avg_photo_time_label)
         self.photo_layout.addRow(" ", self.avg_photo_distance_label)
+
+        self.altitude_group = QGroupBox()
+        self.altitude_layout = QFormLayout(self.altitude_group)
+        self.takeoff_alt_label = QLabel("—")
+        self.landing_alt_label = QLabel("—")
+        self.avg_alt_label = QLabel("—")
+        self.avg_terrain_agl_label = QLabel("—")
+        self.max_alt_label = QLabel("—")
+        self.terrain_var_label = QLabel("—")
+        for lbl in (self.takeoff_alt_label, self.landing_alt_label, self.avg_alt_label,
+                    self.avg_terrain_agl_label, self.max_alt_label, self.terrain_var_label):
+            self.altitude_layout.addRow(" ", lbl)
+
+        self.speed_group = QGroupBox()
+        self.speed_layout = QFormLayout(self.speed_group)
+        self.max_fwd_gnd_label = QLabel("—")
+        self.max_fwd_air_label = QLabel("—")
+        self.avg_fwd_gnd_label = QLabel("—")
+        self.avg_fwd_air_label = QLabel("—")
+        self.avg_mission_gnd_label = QLabel("—")
+        self.avg_mission_air_label = QLabel("—")
+        for lbl in (self.max_fwd_gnd_label, self.max_fwd_air_label,
+                    self.avg_fwd_gnd_label, self.avg_fwd_air_label,
+                    self.avg_mission_gnd_label, self.avg_mission_air_label):
+            self.speed_layout.addRow(" ", lbl)
+
+        self.cog_group = QGroupBox()
+        self.cog_layout = QFormLayout(self.cog_group)
+        self.cog_overall_label, self.cog_overall_dot, cog_overall_row = self._make_efficiency_row()
+        self.cog_fwd_label, self.cog_fwd_dot, cog_fwd_row = self._make_efficiency_row()
+        self.cog_layout.addRow(" ", cog_overall_row)
+        self.cog_layout.addRow(" ", cog_fwd_row)
 
         self.efficiency_group = QGroupBox()
         self.efficiency_layout = QFormLayout(self.efficiency_group)
@@ -176,20 +223,28 @@ class MissionAnalysisWidget(QWidget):
         self._retranslateUi()
 
         columns_layout = QHBoxLayout()
+
         left_column = QVBoxLayout()
         left_column.addWidget(self.time_group)
         left_column.addWidget(self.flight_group)
-        left_column.addWidget(self.wind_group)
-        left_column.addWidget(self.attitude_group)
-        left_column.addWidget(self.photo_group)
+        left_column.addWidget(self.speed_group)
+        left_column.addWidget(self.altitude_group)
         left_column.addStretch()
 
+        mid_column = QVBoxLayout()
+        mid_column.addWidget(self.attitude_group)
+        mid_column.addWidget(self.wind_group)
+        mid_column.addWidget(self.photo_group)
+        mid_column.addStretch()
+
         right_column = QVBoxLayout()
-        right_column.addWidget(self.efficiency_group)
         right_column.addWidget(self.battery_widget)
+        right_column.addWidget(self.efficiency_group)
+        right_column.addWidget(self.cog_group)
         right_column.addStretch()
 
         columns_layout.addLayout(left_column)
+        columns_layout.addLayout(mid_column)
         columns_layout.addLayout(right_column)
         layout.addLayout(columns_layout)
 
@@ -201,6 +256,7 @@ class MissionAnalysisWidget(QWidget):
     def _retranslateUi(self):
         tr = i18n.tr
         self.time_group.setTitle(tr("Время"))
+        self.time_layout.labelForField(self.mission_date_label).setText(tr("Дата выполнения миссии:"))
         self.time_layout.labelForField(self.start_label).setText(tr("Время начала миссии:"))
         self.time_layout.labelForField(self.end_label).setText(tr("Время окончания:"))
         self.time_layout.labelForField(self.duration_label).setText(tr("Продолжительность:"))
@@ -219,12 +275,34 @@ class MissionAnalysisWidget(QWidget):
         self.attitude_group.setTitle(tr("Углы"))
         self.attitude_layout.labelForField(self.max_roll_label).setText(tr("Максимальный крен:"))
         self.attitude_layout.labelForField(self.max_pitch_label).setText(tr("Максимальный тангаж:"))
+        self.attitude_layout.labelForField(self.avg_roll_label).setText(tr("Средний крен:"))
+        self.attitude_layout.labelForField(self.avg_pitch_label).setText(tr("Средний тангаж:"))
 
         self.photo_group.setTitle(tr("Фотосъемка"))
         self.photo_layout.labelForField(self.cam_count_label).setText(tr("Количество фотоимпульсов отправленных в камеры:"))
         self.photo_layout.labelForField(self.trig_count_label).setText(tr("Количество фотоимпульсов полученных от камеры:"))
         self.photo_layout.labelForField(self.avg_photo_time_label).setText(tr("Среднее время между фотоснимками:"))
         self.photo_layout.labelForField(self.avg_photo_distance_label).setText(tr("Среднее расстояние между фотоснимками:"))
+
+        self.altitude_group.setTitle(tr("Высота"))
+        self.altitude_layout.labelForField(self.takeoff_alt_label).setText(tr("Высота взлёта:"))
+        self.altitude_layout.labelForField(self.landing_alt_label).setText(tr("Высота посадки:"))
+        self.altitude_layout.labelForField(self.avg_alt_label).setText(tr("Средняя высота (гориз. полёт):"))
+        self.altitude_layout.labelForField(self.avg_terrain_agl_label).setText(tr("Средняя высота от рельефа:"))
+        self.altitude_layout.labelForField(self.max_alt_label).setText(tr("Максимальная высота:"))
+        self.altitude_layout.labelForField(self.terrain_var_label).setText(tr("Перепад высот рельефа:"))
+
+        self.speed_group.setTitle(tr("Скорость"))
+        self.speed_layout.labelForField(self.max_fwd_gnd_label).setText(tr("Макс. земная скорость (гориз. полёт):"))
+        self.speed_layout.labelForField(self.max_fwd_air_label).setText(tr("Макс. воздушная скорость (гориз. полёт):"))
+        self.speed_layout.labelForField(self.avg_fwd_gnd_label).setText(tr("Средняя земная скорость (гориз. полёт):"))
+        self.speed_layout.labelForField(self.avg_fwd_air_label).setText(tr("Средняя воздушная скорость (гориз. полёт):"))
+        self.speed_layout.labelForField(self.avg_mission_gnd_label).setText(tr("Средняя земная скорость (по миссии):"))
+        self.speed_layout.labelForField(self.avg_mission_air_label).setText(tr("Средняя воздушная скорость (по миссии):"))
+
+        self.cog_group.setTitle(tr("Расчётная центровка"))
+        self.cog_layout.labelForField(self.cog_overall_label.parent()).setText(tr("Центровка за весь полёт:"))
+        self.cog_layout.labelForField(self.cog_fwd_label.parent()).setText(tr("Центровка в горизонтальном полёте:"))
 
         self.efficiency_group.setTitle(tr("Эффективность"))
         self.efficiency_layout.labelForField(self.overall_mah_per_km_label.parent()).setText(tr("Общий расход на километр:"))
@@ -291,6 +369,7 @@ class MissionAnalysisWidget(QWidget):
         start_t, end_t = self._mission_bounds(log_data)
         self._start_t = start_t
         self._end_t = end_t
+        self.mission_date_label.setText(format_gps_date(start_t))
         self.start_label.setText(format_gps_time(start_t))
         self.end_label.setText(format_gps_time(end_t))
         self.duration_label.setText(format_mmss(end_t - start_t))
@@ -310,9 +389,11 @@ class MissionAnalysisWidget(QWidget):
         wind_dir = self._prevailing_wind_direction(log_data)
         self.wind_dir_label.setText(wind_dir if wind_dir is not None else "—")
 
-        max_roll, max_pitch = self._max_attitude(log_data)
+        max_roll, max_pitch, avg_roll, avg_pitch = self._max_attitude(log_data)
         self.max_roll_label.setText(f"{max_roll:.1f}°")
         self.max_pitch_label.setText(f"{max_pitch:.1f}°")
+        self.avg_roll_label.setText(f"{avg_roll:.1f}°")
+        self.avg_pitch_label.setText(f"{avg_pitch:.1f}°")
 
         cam_count, trig_count, avg_photo_time, avg_photo_distance = self._photo_stats(log_data)
         self.cam_count_label.setText(str(cam_count))
@@ -335,7 +416,103 @@ class MissionAnalysisWidget(QWidget):
         }
         self._update_efficiency_dots()
 
-        self.battery_widget.load(log_data)
+        def _fmt_alt(agl, amsl) -> str:
+            parts = []
+            if agl is not None:
+                parts.append(f"{agl:.0f} м AGL")
+            if amsl is not None:
+                parts.append(f"{amsl:.0f} м AMSL")
+            return " / ".join(parts) if parts else "—"
+
+        alt = self._altitude_stats(log_data)
+        self.takeoff_alt_label.setText(_fmt_alt(alt.get("takeoff_agl"), alt.get("takeoff_amsl")))
+        self.landing_alt_label.setText(_fmt_alt(alt.get("landing_agl"), alt.get("landing_amsl")))
+        self.avg_alt_label.setText(_fmt_alt(alt.get("avg_agl"), alt.get("avg_amsl")))
+        avg_ter = alt.get("avg_terrain_agl")
+        self.avg_terrain_agl_label.setText(f"{avg_ter:.0f} м AGL" if avg_ter is not None else "—")
+        self.max_alt_label.setText(_fmt_alt(alt.get("max_agl"), alt.get("max_amsl")))
+        tv = alt.get("terrain_variation")
+        self.terrain_var_label.setText(f"{tv:.0f} м" if tv is not None else "—")
+
+        spd = self._speed_stats(log_data, end_t - start_t)
+        def _ms(key): return f"{spd[key]:.1f} м/с" if spd.get(key) is not None else "—"
+        self.max_fwd_gnd_label.setText(_ms("max_fwd_gnd"))
+        self.max_fwd_air_label.setText(_ms("max_fwd_air"))
+        self.avg_fwd_gnd_label.setText(_ms("avg_fwd_gnd"))
+        self.avg_fwd_air_label.setText(_ms("avg_fwd_air"))
+        self.avg_mission_gnd_label.setText(_ms("avg_mission_gnd"))
+        self.avg_mission_air_label.setText(_ms("avg_mission_air"))
+
+        # CG from PIDP.I
+        pidp_table = log_data.messages.get("PIDP")
+        self._cog_overall_value = None
+        self._cog_fwd_value = None
+        if pidp_table and "I" in pidp_table:
+            pidp_t = np.asarray(pidp_table["timestamp"], dtype=float)
+            pidp_i = np.asarray(pidp_table["I"], dtype=float)
+            mask_mission = (pidp_t >= start_t) & (pidp_t <= end_t)
+            if mask_mission.any():
+                self._cog_overall_value = float(np.mean(pidp_i[mask_mission]))
+            fwd = self._forward_motor_series(log_data)
+            if fwd is not None and mask_mission.any():
+                fwd_t_arr, fwd_pwm = fwd
+                pwm_at = np.interp(pidp_t, fwd_t_arr, fwd_pwm)
+                fwd_mask = mask_mission & (pwm_at > _RUNNING_PWM)
+                if fwd_mask.any():
+                    self._cog_fwd_value = float(np.mean(pidp_i[fwd_mask]))
+        self._update_cog_display()
+
+        vert_motors = self._vertical_motor_series(log_data) or None
+        fwd_motor = self._forward_motor_series(log_data)
+        self.battery_widget.load(log_data, vert_motors=vert_motors, fwd_motor=fwd_motor)
+
+    def set_cog_thresholds(self, neutral_min: float, neutral_max: float,
+                           front_red: float, rear_red: float) -> None:
+        self._cog_neutral_min = neutral_min
+        self._cog_neutral_max = neutral_max
+        self._cog_front_red = front_red
+        self._cog_rear_red = rear_red
+        self._update_cog_display()
+
+    def _cog_text(self, value: float | None) -> str:
+        if value is None:
+            return "—"
+        if value > self._cog_neutral_max:
+            label = "Передняя"
+        elif value < self._cog_neutral_min:
+            label = "Задняя"
+        else:
+            label = "Нейтральная"
+        return f"{label} ({value:+.2f})"
+
+    def _cog_rgb(self, value: float | None) -> tuple[int, int, int] | None:
+        if value is None:
+            return None
+        nmin, nmax = self._cog_neutral_min, self._cog_neutral_max
+        if nmin <= value <= nmax:
+            return _COG_GREEN_RGB
+        elif value > nmax:
+            span = self._cog_front_red - nmax
+            t = (value - nmax) / span if span > 0 else 1.0
+            return _lerp_rgb(_COG_GREEN_RGB, _COG_RED_RGB, min(1.0, t))
+        else:
+            span = nmin - self._cog_rear_red
+            t = (nmin - value) / span if span > 0 else 1.0
+            return _lerp_rgb(_COG_GREEN_RGB, _COG_RED_RGB, min(1.0, t))
+
+    def _update_cog_display(self) -> None:
+        for value, lbl, dot in (
+            (self._cog_overall_value, self.cog_overall_label, self.cog_overall_dot),
+            (self._cog_fwd_value, self.cog_fwd_label, self.cog_fwd_dot),
+        ):
+            lbl.setText(self._cog_text(value))
+            rgb = self._cog_rgb(value)
+            if rgb is None:
+                dot.setStyleSheet("background-color: #555555; border-radius: 6px;")
+            else:
+                dot.setStyleSheet(
+                    f"background-color: rgb({rgb[0]},{rgb[1]},{rgb[2]}); border-radius: 6px;"
+                )
 
     def _mission_bounds(self, log_data: LogData) -> tuple[float, float]:
         ev_table = log_data.messages.get("EV")
@@ -407,6 +584,19 @@ class MissionAnalysisWidget(QWidget):
             return None
         return rcou_table["timestamp"], rcou_table[field]
 
+    def _vertical_motor_series(self, log_data: LogData) -> list[tuple[np.ndarray, np.ndarray]]:
+        rcou_table = log_data.messages.get("RCOU")
+        if not rcou_table:
+            return []
+        channel_for_function = self._channel_for_function(log_data)
+        result = []
+        for key in _VERTICAL_MOTOR_KEYS:
+            ch = channel_for_function.get(key)
+            field = f"C{ch}" if ch else None
+            if field and field in rcou_table:
+                result.append((rcou_table["timestamp"], rcou_table[field]))
+        return result
+
     def _battery_mah(self, log_data: LogData, motor: tuple[np.ndarray, np.ndarray] | None = None) -> float:
         """Total mA*h consumed across both battery instances. When `motor` is
         given (RCOU timestamp/pwm of the forward motor), only counts mA*h
@@ -450,6 +640,140 @@ class MissionAnalysisWidget(QWidget):
         fwd_per_km = fwd_mah / (fwd_distance_m / 1000.0) if fwd_distance_m > 0 else None
         fwd_per_min = fwd_mah / (fwd_time_s / 60.0) if fwd_time_s > 0 else None
         return overall_per_km, overall_per_min, fwd_per_km, fwd_per_min
+
+    def _altitude_stats(self, log_data: LogData) -> dict:
+        """Compute AGL (BARO) and AMSL (GPS) altitude statistics."""
+        # --- AGL source (BARO relative-to-home) ---
+        baro_t = baro_alt = None
+        for baro_msg, baro_field in _BARO_ALT_CANDIDATES:
+            table = log_data.messages.get(baro_msg)
+            if table and baro_field in table and len(table[baro_field]) > 1:
+                baro_t = np.asarray(table["timestamp"], dtype=float)
+                baro_alt = np.asarray(table[baro_field], dtype=float)
+                break
+
+        # --- AMSL source (GPS.Alt metres MSL) ---
+        gps_t = gps_amsl = None
+        for gps_msg, alt_field in _GPS_AMSL_CANDIDATES:
+            table = log_data.messages.get(gps_msg)
+            if table and alt_field in table and len(table[alt_field]) > 1:
+                gps_t = np.asarray(table["timestamp"], dtype=float)
+                gps_amsl = np.asarray(table[alt_field], dtype=float)
+                break
+
+        if baro_t is None:
+            return {}
+
+        start_t, end_t = self._mission_bounds(log_data)
+        result: dict = {}
+
+        def _amsl(t: float) -> float | None:
+            if gps_t is None:
+                return None
+            return float(np.interp(t, gps_t, gps_amsl))
+
+        # Takeoff / landing
+        takeoff_agl = float(np.interp(start_t, baro_t, baro_alt))
+        landing_agl = float(np.interp(end_t, baro_t, baro_alt))
+        result["takeoff_agl"] = takeoff_agl
+        result["landing_agl"] = landing_agl
+        result["takeoff_amsl"] = _amsl(start_t)
+        result["landing_amsl"] = _amsl(end_t)
+
+        # Max altitude over the flight
+        mask_flight = (baro_t >= start_t) & (baro_t <= end_t)
+        if mask_flight.any():
+            sub_t = baro_t[mask_flight]
+            sub_alt = baro_alt[mask_flight]
+            max_idx = int(np.argmax(sub_alt))
+            result["max_agl"] = float(sub_alt[max_idx])
+            result["max_amsl"] = _amsl(float(sub_t[max_idx]))
+
+        # Average altitude during horizontal (forward motor running) flight
+        forward = self._forward_motor_series(log_data)
+        if forward is not None and mask_flight.any():
+            fwd_t, fwd_pwm = forward
+            pwm_at = np.interp(baro_t, fwd_t, fwd_pwm)
+            fwd_mask = mask_flight & (pwm_at > _RUNNING_PWM)
+            if fwd_mask.any():
+                result["avg_agl"] = float(np.mean(baro_alt[fwd_mask]))
+                if gps_t is not None:
+                    result["avg_amsl"] = float(np.mean(np.interp(baro_t[fwd_mask], gps_t, gps_amsl)))
+        if "avg_agl" not in result and mask_flight.any():
+            # Fallback: trim first/last 10 % to exclude takeoff/landing phases
+            sub_alt = baro_alt[mask_flight]
+            n = len(sub_alt)
+            trim = max(1, n // 10)
+            trimmed = sub_alt[trim: max(trim + 1, n - trim)]
+            if len(trimmed):
+                result["avg_agl"] = float(np.mean(trimmed))
+
+        # Average height AGL over the whole flight (includes vert + fwd + glide)
+        if mask_flight.any():
+            result["avg_terrain_agl"] = float(np.mean(baro_alt[mask_flight]))
+
+        # Terrain elevation variation along the route
+        if gps_t is not None and mask_flight.any():
+            gps_at_baro = np.interp(baro_t[mask_flight], gps_t, gps_amsl)
+            terrain = gps_at_baro - baro_alt[mask_flight]
+            result["terrain_variation"] = float(np.max(terrain) - np.min(terrain))
+
+        return result
+
+    def _speed_stats(self, log_data: LogData, duration_s: float) -> dict:
+        """Ground + airspeed stats: max/avg during forward motor, avg over whole mission."""
+        # Ground speed source
+        gnd_t = gnd_vals = None
+        for msg_type, spd_field in (("GPS", "Spd"), ("GPS", "GSpd")):
+            table = log_data.messages.get(msg_type)
+            if table and spd_field in table and len(table[spd_field]) > 0:
+                gnd_t = np.asarray(table["timestamp"], dtype=float)
+                gnd_vals = np.asarray(table[spd_field], dtype=float)
+                break
+
+        # Airspeed source
+        air_t = air_vals = None
+        for msg_type, air_field in (("ARSPD", "Airspeed"), ("ARSP", "Airspeed")):
+            table = log_data.messages.get(msg_type)
+            if table and air_field in table and len(table[air_field]) > 0:
+                air_t = np.asarray(table["timestamp"], dtype=float)
+                air_vals = np.asarray(table[air_field], dtype=float)
+                break
+
+        result: dict = {}
+        start_t, end_t = self._mission_bounds(log_data)
+        fwd = self._forward_motor_series(log_data)
+
+        # Ground speed stats
+        if gnd_t is not None:
+            mask = (gnd_t >= start_t) & (gnd_t <= end_t)
+            dist = self._distance_m(log_data)
+            if duration_s > 0 and dist > 0:
+                result["avg_mission_gnd"] = dist / duration_s
+            if fwd is not None and mask.any():
+                fwd_t, fwd_pwm = fwd
+                pwm_at = np.interp(gnd_t, fwd_t, fwd_pwm)
+                fwd_mask = mask & (pwm_at > _RUNNING_PWM)
+                if fwd_mask.any():
+                    s = gnd_vals[fwd_mask]
+                    result["max_fwd_gnd"] = float(np.max(s))
+                    result["avg_fwd_gnd"] = float(np.mean(s))
+
+        # Airspeed stats
+        if air_t is not None:
+            mask = (air_t >= start_t) & (air_t <= end_t)
+            if mask.any():
+                result["avg_mission_air"] = float(np.mean(air_vals[mask]))
+            if fwd is not None and mask.any():
+                fwd_t, fwd_pwm = fwd
+                pwm_at = np.interp(air_t, fwd_t, fwd_pwm)
+                fwd_mask = mask & (pwm_at > _RUNNING_PWM)
+                if fwd_mask.any():
+                    s = air_vals[fwd_mask]
+                    result["max_fwd_air"] = float(np.max(s))
+                    result["avg_fwd_air"] = float(np.mean(s))
+
+        return result
 
     def _wind_series(self, log_data: LogData) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         for msg_type, north_f, east_f in _WIND_CANDIDATES:
@@ -509,7 +833,8 @@ class MissionAnalysisWidget(QWidget):
         _, label = max((tail_t, "попутный"), (head_t, "встречный"), (cross_t, "боковой"))
         return label
 
-    def _max_attitude(self, log_data: LogData) -> tuple[float, float]:
+    def _max_attitude(self, log_data: LogData) -> tuple[float, float, float, float]:
+        """Returns (max_roll, max_pitch, avg_roll, avg_pitch) in degrees."""
         for msg_type, roll_f, pitch_f, yaw_f, is_radians in _ATTITUDE_CANDIDATES:
             table = log_data.messages.get(msg_type)
             if table and roll_f in table and pitch_f in table:
@@ -517,9 +842,10 @@ class MissionAnalysisWidget(QWidget):
                 if is_radians:
                     roll, pitch = np.degrees(roll), np.degrees(pitch)
                 if len(roll) == 0:
-                    return 0.0, 0.0
-                return float(np.max(np.abs(roll))), float(np.max(np.abs(pitch)))
-        return 0.0, 0.0
+                    return 0.0, 0.0, 0.0, 0.0
+                return (float(np.max(np.abs(roll))), float(np.max(np.abs(pitch))),
+                        float(np.mean(np.abs(roll))), float(np.mean(np.abs(pitch))))
+        return 0.0, 0.0, 0.0, 0.0
 
     def _photo_positions(self, msg_type: str, log_data: LogData) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         table = log_data.messages.get(msg_type)
@@ -571,9 +897,11 @@ class MissionAnalysisWidget(QWidget):
             if mah_lbl.text() != "—":
                 batteries.append(
                     {"index": idx, "mah": mah_lbl.text(),
-                     "max_curr": max_lbl.text(), "avg_curr": avg_lbl.text()}
+                     "max_curr": max_lbl.text(),
+                     "avg_curr": avg_lbl.text()}
                 )
         return {
+            "mission_date": self.mission_date_label.text(),
             "start_time": self.start_label.text(),
             "end_time": self.end_label.text(),
             "start_epoch": self._start_t,
@@ -588,6 +916,8 @@ class MissionAnalysisWidget(QWidget):
             "wind_dir": self.wind_dir_label.text(),
             "max_roll": self.max_roll_label.text(),
             "max_pitch": self.max_pitch_label.text(),
+            "avg_roll": self.avg_roll_label.text(),
+            "avg_pitch": self.avg_pitch_label.text(),
             "cam_count": self.cam_count_label.text(),
             "trig_count": self.trig_count_label.text(),
             "avg_photo_time": self.avg_photo_time_label.text(),
@@ -597,6 +927,20 @@ class MissionAnalysisWidget(QWidget):
             "forward_mah_per_km": self.forward_mah_per_km_label.text(),
             "forward_mah_per_min": self.forward_mah_per_min_label.text(),
             "batteries": batteries,
+            "takeoff_alt": self.takeoff_alt_label.text(),
+            "landing_alt": self.landing_alt_label.text(),
+            "avg_alt": self.avg_alt_label.text(),
+            "avg_terrain_agl": self.avg_terrain_agl_label.text(),
+            "max_alt": self.max_alt_label.text(),
+            "terrain_variation": self.terrain_var_label.text(),
+            "max_fwd_gnd": self.max_fwd_gnd_label.text(),
+            "max_fwd_air": self.max_fwd_air_label.text(),
+            "avg_fwd_gnd": self.avg_fwd_gnd_label.text(),
+            "avg_fwd_air": self.avg_fwd_air_label.text(),
+            "avg_mission_gnd": self.avg_mission_gnd_label.text(),
+            "avg_mission_air": self.avg_mission_air_label.text(),
+            "cog_overall": self.cog_overall_label.text(),
+            "cog_fwd": self.cog_fwd_label.text(),
         }
 
     def _open_report_dialog(self):

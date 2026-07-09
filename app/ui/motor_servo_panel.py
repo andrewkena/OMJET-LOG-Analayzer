@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
 
 from app.ui.gauge_widget import TapeGauge, DeflectionGauge
 
-_NEUTRAL_PWM = 1500.0
+_DEFAULT_TRIM = 1500.0
 _MOTOR_PWM_MIN = 1100.0
 _MOTOR_PWM_MAX = 2000.0
 _MOTOR_KEYS = ["Motor3", "Motor1", "Motor2", "Motor4"]
@@ -125,6 +125,13 @@ class MotorServoPanel(QWidget):
         layout.addWidget(surfaces_container, alignment=Qt.AlignTop)
 
         self._series: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._surface_trim: dict[str, float] = {}
+        self._surface_range: dict[str, float] = {}
+
+    def set_surface_calibration(self, key: str, trim: float, min_pwm: float, max_pwm: float) -> None:
+        """Set neutral trim and observed min/max PWM for a control surface gauge."""
+        self._surface_trim[key] = trim
+        self._surface_range[key] = max(trim - min_pwm, max_pwm - trim, 1.0)
 
     def set_pwm_series(self, key: str, t: np.ndarray, pwm: np.ndarray):
         self._series[key] = (t, pwm)
@@ -133,7 +140,7 @@ class MotorServoPanel(QWidget):
 
     def clear_series(self, key: str):
         self._series.pop(key, None)
-        self._update_gauge(key, _NEUTRAL_PWM)
+        self._update_gauge(key, self._surface_trim.get(key, _DEFAULT_TRIM))
 
     def _update_gauge(self, key: str, pwm_value: float):
         gauge = self._gauges.get(key)
@@ -141,7 +148,9 @@ class MotorServoPanel(QWidget):
             return
         gauge.set_extra_text(f"{pwm_value:.0f}")
         if isinstance(gauge, DeflectionGauge):
-            gauge.set_value((pwm_value - _NEUTRAL_PWM) / 500.0)
+            trim = self._surface_trim.get(key, _DEFAULT_TRIM)
+            rng = self._surface_range.get(key, 500.0)
+            gauge.set_value((pwm_value - trim) / rng)
         else:
             gauge.set_range(0.0, 100.0)
             pct = (pwm_value - _MOTOR_PWM_MIN) / (_MOTOR_PWM_MAX - _MOTOR_PWM_MIN) * 100.0

@@ -3,10 +3,12 @@ compass (yaw), synced to the playback cursor."""
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QPolygonF, QFont
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QGraphicsOpacityEffect
 
 from app.ui.gauge_widget import TapeGauge, BatteryGauge
@@ -21,6 +23,33 @@ _PLANE_POINTS = [
     (0, -10), (1.2, -2.8), (9, 3), (9, 4.8), (1, 2.3), (1.6, 7.2), (4, 9), (4, 10),
     (0, 9), (-4, 10), (-4, 9), (-1.6, 7.2), (-1, 2.3), (-9, 4.8), (-9, 3), (-1.2, -2.8),
 ]
+# Motor positions for VTOL 4+1 icon (center-relative, ±7 units)
+_VTOL41_MOTOR_POS = [(-7, -7), (7, -7), (-7, 7), (7, 7)]
+
+_ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
+_SVG_ICON_FILES = {
+    "VTOL 4+1":        "vtol41_icon.svg",
+    "Коптер":          "copter_icon.svg",
+    "VTOL 2+1 vector": "vtol31_icon.svg",
+    "default":         "def_icon.svg",
+}
+_svg_renderers: dict[str, QSvgRenderer] = {}
+
+
+def _get_renderer(vehicle_type: str) -> QSvgRenderer | None:
+    if vehicle_type not in _SVG_ICON_FILES:
+        return None
+    if vehicle_type not in _svg_renderers:
+        p = _ASSETS_DIR / _SVG_ICON_FILES[vehicle_type]
+        if p.exists():
+            _svg_renderers[vehicle_type] = QSvgRenderer(str(p))
+    return _svg_renderers.get(vehicle_type)
+
+
+def apply_icon_mapping(mapping: dict[str, str]) -> None:
+    """Update the vehicle-type → SVG filename mapping and clear the renderer cache."""
+    _SVG_ICON_FILES.update(mapping)
+    _svg_renderers.clear()
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -147,6 +176,11 @@ class HeadingIndicator(QWidget):
         self.setFixedSize(150, 150)
         self._heading = 0.0
         self._wind_dir = None
+        self._vehicle_type = ""
+
+    def set_vehicle_type(self, type_str: str):
+        self._vehicle_type = type_str
+        self.update()
 
     def set_heading(self, heading: float):
         self._heading = heading % 360.0
@@ -216,14 +250,26 @@ class HeadingIndicator(QWidget):
         painter.setPen(QPen(QColor("white"), 2))
         painter.drawLine(QPointF(cx, cy - radius + 1), QPointF(cx, cy - radius + 8))
 
-        # Fixed aircraft symbol mounted in the center, pointing up (same silhouette as the map icon).
+        # Fixed aircraft symbol mounted in the center, pointing up.
         painter.save()
         painter.translate(cx, cy)
         s = radius * 0.06
-        plane = QPolygonF([QPointF(x * s, y * s) for x, y in _PLANE_POINTS])
         painter.setPen(QPen(QColor("#1a1a1a"), 1))
         painter.setBrush(QColor("#ffd000"))
-        painter.drawPolygon(plane)
+        renderer = _get_renderer(self._vehicle_type)
+        is_default = renderer is None
+        if is_default:
+            renderer = _get_renderer("default")
+        if renderer and renderer.isValid():
+            if is_default or self._vehicle_type == "Коптер":
+                scale = 1.31
+            else:
+                scale = 1.75
+            icon_size = radius * scale
+            renderer.render(painter, QRectF(-icon_size / 2, -icon_size / 2, icon_size, icon_size))
+        else:
+            plane = QPolygonF([QPointF(x * s, y * s) for x, y in _PLANE_POINTS])
+            painter.drawPolygon(plane)
         painter.restore()
 
 
@@ -362,6 +408,10 @@ class AttitudePanel(QWidget):
         self._waypoints: list[tuple[float, float]] = []
         self._target_idx = np.array([], dtype=int)
 
+        self._cmd_wp_t = np.array([])
+        self._cmd_wp_lat = np.array([])
+        self._cmd_wp_lon = np.array([])
+
     def set_battery_cell_count(self, cell_count: int):
         """Update the battery cell count for voltage-per-cell calculation."""
         self._cell_count = cell_count
@@ -389,6 +439,11 @@ class AttitudePanel(QWidget):
 
     def set_vehicle_type(self, type_str: str):
         self.vehicle_type_label.setText(f"Тип: {type_str}")
+        self.compass.set_vehicle_type(type_str)
+
+    def set_icon_mapping(self, mapping: dict[str, str]):
+        apply_icon_mapping(mapping)
+        self.compass.update()
 
     def clear_data(self):
         self._t = np.array([])
@@ -408,11 +463,19 @@ class AttitudePanel(QWidget):
     def clear_position_data(self):
         self._pos_t = np.array([])
         self._target_idx = np.array([], dtype=int)
+        self._cmd_wp_t = np.array([])
+        self._cmd_wp_lat = np.array([])
+        self._cmd_wp_lon = np.array([])
         self.bearing_label.setText("Курс на точку: --")
 
     def set_mission_waypoints(self, waypoints: list[tuple[float, float]]):
         self._waypoints = waypoints
         self._update_target_indices()
+
+    def set_cmd_waypoint_timeline(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):
+        self._cmd_wp_t = t
+        self._cmd_wp_lat = lat
+        self._cmd_wp_lon = lon
 
     def _update_target_indices(self):
         """Pick, for every position sample, the next not-yet-reached waypoint
@@ -501,9 +564,18 @@ class AttitudePanel(QWidget):
         if len(self._pos_t):
             idx = int(np.searchsorted(self._pos_t, t))
             idx = max(0, min(idx, len(self._pos_t) - 1))
-            if len(self._target_idx):
+            pos_lat = float(self._pos_lat[idx])
+            pos_lon = float(self._pos_lon[idx])
+            if len(self._cmd_wp_t):
+                wp_idx = int(np.searchsorted(self._cmd_wp_t, t, side='right')) - 1
+                wp_idx = max(0, min(wp_idx, len(self._cmd_wp_t) - 1))
+                bearing = _initial_bearing(pos_lat, pos_lon,
+                                           float(self._cmd_wp_lat[wp_idx]),
+                                           float(self._cmd_wp_lon[wp_idx]))
+                self.bearing_label.setText(f"Курс на точку: {bearing:.0f}°")
+            elif len(self._target_idx):
                 wp_lat, wp_lon = self._waypoints[int(self._target_idx[idx])]
-                bearing = _initial_bearing(float(self._pos_lat[idx]), float(self._pos_lon[idx]), wp_lat, wp_lon)
+                bearing = _initial_bearing(pos_lat, pos_lon, wp_lat, wp_lon)
                 self.bearing_label.setText(f"Курс на точку: {bearing:.0f}°")
             else:
                 self.bearing_label.setText("Курс на точку: --")

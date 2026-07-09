@@ -1,13 +1,26 @@
 """Application settings tab - battery configuration and other app preferences."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QComboBox, QCheckBox,
-    QSpinBox, QFormLayout, QListWidget, QListWidgetItem, QPushButton, QMessageBox
+    QSpinBox, QDoubleSpinBox, QFormLayout, QListWidget, QListWidgetItem, QPushButton, QMessageBox
 )
 from PySide6.QtCore import Signal
 
 from app.core import tile_cache, i18n
+
+_ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
+_SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "user_settings.json"
+
+_ICON_VEHICLE_TYPES = [
+    ("VTOL 4+1",        "vtol41_icon.svg"),
+    ("VTOL 2+1 vector", "vtol31_icon.svg"),
+    ("Коптер",          "copter_icon.svg"),
+    ("По умолчанию",    "def_icon.svg"),
+]
 
 _CACHE_SIZE_OPTIONS = [
     ("250 МБ", 250 * 1024 * 1024),
@@ -32,6 +45,8 @@ class SettingsWidget(QWidget):
     theme_changed = Signal(str)
     timezone_changed = Signal(float)
     language_changed = Signal(str)
+    icon_mapping_changed = Signal(dict)
+    cog_thresholds_changed = Signal(float, float, float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,6 +63,10 @@ class SettingsWidget(QWidget):
         self._eff_green = 200
         self._eff_yellow = 300
         self._eff_red = 400
+        self._cog_neutral_min = -3.0
+        self._cog_neutral_max = 3.0
+        self._cog_front_red = 10.0
+        self._cog_rear_red = -10.0
         self._tile_handler = None
 
         outer_layout = QVBoxLayout(self)
@@ -122,12 +141,33 @@ class SettingsWidget(QWidget):
         cache_layout.addWidget(self.clear_cache_button)
         layout.addWidget(self.cache_group)
 
+        # ── Icon mapping ─────────────────────────────────────────────────────
+        self.icon_group = QGroupBox()
+        icon_layout = QFormLayout(self.icon_group)
+        self._icon_combos: dict[str, QComboBox] = {}
+        svg_files = sorted(p.name for p in _ASSETS_DIR.glob("*.svg")) if _ASSETS_DIR.exists() else []
+        saved_mapping = self._load_icon_mapping()
+        for vtype, default_svg in _ICON_VEHICLE_TYPES:
+            combo = QComboBox()
+            for name in svg_files:
+                combo.addItem(name)
+            current_svg = saved_mapping.get(vtype, default_svg)
+            if current_svg in svg_files:
+                combo.setCurrentText(current_svg)
+            combo.currentTextChanged.connect(self._on_icon_mapping_changed)
+            self._icon_combos[vtype] = combo
+            lbl = QLabel(vtype)
+            icon_layout.addRow(lbl, combo)
+        layout.addWidget(self.icon_group)
+
         layout = right_layout
 
         # ── Battery ──────────────────────────────────────────────────────────
         self.battery_group = QGroupBox()
-        battery_layout = QFormLayout(self.battery_group)
+        battery_outer = QHBoxLayout(self.battery_group)
 
+        # Left: settings
+        battery_layout = QFormLayout()
         self.cell_count_combo = QComboBox()
         self.cell_count_combo.addItems(["4S", "6S", "8S", "10S", "12S"])
         self.cell_count_combo.setCurrentText("8S")
@@ -144,6 +184,21 @@ class SettingsWidget(QWidget):
         self._update_threshold_label()
         self.voltage_range_label = QLabel()
         battery_layout.addRow(self.voltage_range_label, self.threshold_label)
+        battery_outer.addLayout(battery_layout)
+
+        # Right: voltage info
+        info_layout = QVBoxLayout()
+        self.info_lipo_title = QLabel("LiPo / Li-ion:")
+        self.info_lipo_full = QLabel()
+        self.info_lipo_min = QLabel()
+        self.info_lihv_title = QLabel()
+        self.info_lihv_full = QLabel()
+        self.info_lihv_min = QLabel()
+        for lbl in (self.info_lipo_title, self.info_lipo_full, self.info_lipo_min,
+                    self.info_lihv_title, self.info_lihv_full, self.info_lihv_min):
+            info_layout.addWidget(lbl)
+        info_layout.addStretch()
+        battery_outer.addLayout(info_layout)
 
         layout.addWidget(self.battery_group)
 
@@ -239,19 +294,59 @@ class SettingsWidget(QWidget):
         efficiency_layout.addRow(self.eff_row_label, eff_row)
         layout.addWidget(self.efficiency_group)
 
-        # ── Battery info ─────────────────────────────────────────────────────
-        self.info_group = QGroupBox()
-        info_layout = QVBoxLayout(self.info_group)
-        self.info_lipo_title = QLabel("LiPo / Li-ion:")
-        self.info_lipo_full = QLabel()
-        self.info_lipo_min = QLabel()
-        self.info_lihv_title = QLabel()
-        self.info_lihv_full = QLabel()
-        self.info_lihv_min = QLabel()
-        for lbl in (self.info_lipo_title, self.info_lipo_full, self.info_lipo_min,
-                    self.info_lihv_title, self.info_lihv_full, self.info_lihv_min):
-            info_layout.addWidget(lbl)
-        layout.addWidget(self.info_group)
+        # ── Center of Gravity thresholds ─────────────────────────────────────
+        self.cog_group = QGroupBox()
+        cog_layout = QFormLayout(self.cog_group)
+
+        neutral_row = QHBoxLayout()
+        neutral_row.addWidget(self._make_dot("#3cb44b"))
+        self.cog_neutral_min_spin = QDoubleSpinBox()
+        self.cog_neutral_min_spin.setRange(-100.0, 0.0)
+        self.cog_neutral_min_spin.setDecimals(1)
+        self.cog_neutral_min_spin.setSingleStep(0.5)
+        self.cog_neutral_min_spin.setValue(-3.0)
+        self.cog_neutral_min_spin.valueChanged.connect(self._on_cog_thresholds_changed)
+        neutral_row.addWidget(self.cog_neutral_min_spin)
+        self.cog_neutral_to_label = QLabel()
+        neutral_row.addWidget(self.cog_neutral_to_label)
+        self.cog_neutral_max_spin = QDoubleSpinBox()
+        self.cog_neutral_max_spin.setRange(0.0, 100.0)
+        self.cog_neutral_max_spin.setDecimals(1)
+        self.cog_neutral_max_spin.setSingleStep(0.5)
+        self.cog_neutral_max_spin.setValue(3.0)
+        self.cog_neutral_max_spin.valueChanged.connect(self._on_cog_thresholds_changed)
+        neutral_row.addWidget(self.cog_neutral_max_spin)
+        neutral_row.addStretch()
+        self.cog_neutral_label = QLabel()
+        cog_layout.addRow(self.cog_neutral_label, neutral_row)
+
+        front_row = QHBoxLayout()
+        front_row.addWidget(self._make_dot("#e6194b"))
+        self.cog_front_spin = QDoubleSpinBox()
+        self.cog_front_spin.setRange(0.0, 100.0)
+        self.cog_front_spin.setDecimals(1)
+        self.cog_front_spin.setSingleStep(0.5)
+        self.cog_front_spin.setValue(10.0)
+        self.cog_front_spin.valueChanged.connect(self._on_cog_thresholds_changed)
+        front_row.addWidget(self.cog_front_spin)
+        front_row.addStretch()
+        self.cog_front_label = QLabel()
+        cog_layout.addRow(self.cog_front_label, front_row)
+
+        rear_row = QHBoxLayout()
+        rear_row.addWidget(self._make_dot("#e6194b"))
+        self.cog_rear_spin = QDoubleSpinBox()
+        self.cog_rear_spin.setRange(-100.0, 0.0)
+        self.cog_rear_spin.setDecimals(1)
+        self.cog_rear_spin.setSingleStep(0.5)
+        self.cog_rear_spin.setValue(-10.0)
+        self.cog_rear_spin.valueChanged.connect(self._on_cog_thresholds_changed)
+        rear_row.addWidget(self.cog_rear_spin)
+        rear_row.addStretch()
+        self.cog_rear_label = QLabel()
+        cog_layout.addRow(self.cog_rear_label, rear_row)
+
+        layout.addWidget(self.cog_group)
 
         left_layout.addStretch()
         right_layout.addStretch()
@@ -269,6 +364,8 @@ class SettingsWidget(QWidget):
         self.timezone_label.setText(tr("Часовой пояс:"))
         self.language_label.setText(tr("Язык:"))
         self.language_combo.setItemText(0, tr("Русский"))
+
+        self.icon_group.setTitle(tr("Иконки типов ВС"))
 
         self.notifications_group.setTitle(tr("Уведомления"))
         self.sound_alerts_checkbox.setText(tr("Звуковые оповещения"))
@@ -303,7 +400,12 @@ class SettingsWidget(QWidget):
         self.efficiency_group.setTitle(tr("Пороги эффективности"))
         self.eff_row_label.setText(tr("Расход (мА·ч):"))
 
-        self.info_group.setTitle(tr("Информация о напряжении"))
+        self.cog_group.setTitle(tr("Центровка"))
+        self.cog_neutral_label.setText(tr("Нейтральная:"))
+        self.cog_neutral_to_label.setText(tr("до"))
+        self.cog_front_label.setText(tr("Передняя (красный порог):"))
+        self.cog_rear_label.setText(tr("Задняя (красный порог):"))
+
         self.info_lipo_full.setText(tr("  • Полный заряд: 4.20В/ячейку"))
         self.info_lipo_min.setText(tr("  • Минимум: 3.60В/ячейку"))
         self.info_lihv_title.setText(tr("LiHV (повышенное напряжение):"))
@@ -410,6 +512,20 @@ class SettingsWidget(QWidget):
     def get_efficiency_thresholds(self) -> tuple[float, float, float]:
         return float(self._eff_green), float(self._eff_yellow), float(self._eff_red)
 
+    def _on_cog_thresholds_changed(self):
+        neutral_min = self.cog_neutral_min_spin.value()
+        neutral_max = self.cog_neutral_max_spin.value()
+        front_red = self.cog_front_spin.value()
+        rear_red = self.cog_rear_spin.value()
+        self._cog_neutral_min = neutral_min
+        self._cog_neutral_max = neutral_max
+        self._cog_front_red = front_red
+        self._cog_rear_red = rear_red
+        self.cog_thresholds_changed.emit(neutral_min, neutral_max, front_red, rear_red)
+
+    def get_cog_thresholds(self) -> tuple[float, float, float, float]:
+        return self._cog_neutral_min, self._cog_neutral_max, self._cog_front_red, self._cog_rear_red
+
     def _on_max_wind_changed(self, value: int):
         self._max_wind = value
         self.max_wind_changed.emit(float(self._max_wind))
@@ -443,6 +559,32 @@ class SettingsWidget(QWidget):
         self._update_cache_size_label()
         QMessageBox.information(self, i18n.tr("Кэш карты"),
                                 i18n.tr("Кэш картографических данных очищен."))
+
+    def get_icon_mapping(self) -> dict[str, str]:
+        return {vtype: combo.currentText() for vtype, combo in self._icon_combos.items()}
+
+    def _on_icon_mapping_changed(self):
+        mapping = self.get_icon_mapping()
+        self._save_icon_mapping(mapping)
+        self.icon_mapping_changed.emit(mapping)
+
+    def _save_icon_mapping(self, mapping: dict[str, str]):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data["icon_mapping"] = mapping
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _load_icon_mapping(self) -> dict[str, str]:
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            return data.get("icon_mapping", {})
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
 
     def showEvent(self, event):
         super().showEvent(event)

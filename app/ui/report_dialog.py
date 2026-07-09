@@ -13,11 +13,13 @@ from PySide6.QtCore import QMarginsF, QUrl
 from PySide6.QtGui import QImage, QPdfWriter, QTextDocument, QPageLayout, QPageSize
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
-    QCheckBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox,
+    QCheckBox, QComboBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox,
 )
 
 from app.core.log_loader import LogData
 from app.core.time_format import format_gps_datetime
+
+_LOGO_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "logo.png"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GPS / wind extraction helpers
@@ -33,7 +35,7 @@ _ARM_EVENT_ID   = 10
 _DISARM_EVENT_ID = 11
 
 
-def _extract_gps_track(log_data: LogData) -> list[tuple[float, float, float]]:
+def _extract_gps_track(log_data: LogData) -> tuple[np.ndarray, list[tuple[float, float, float]]]:
     """Return list of (lat, lon, alt_m_above_home) from GPS position + BARO altitude."""
     # --- GPS lat/lon ---
     gps_t = gps_lat = gps_lon = None
@@ -55,7 +57,7 @@ def _extract_gps_track(log_data: LogData) -> list[tuple[float, float, float]]:
         break
 
     if gps_t is None:
-        return []
+        return np.array([]), []
 
     # --- Altitude: BARO relative-to-home (best for flight viz), fallback GPS MSL ---
     alt = np.zeros(len(gps_t))
@@ -85,7 +87,7 @@ def _extract_gps_track(log_data: LogData) -> list[tuple[float, float, float]]:
             alt = np.interp(gps_t, np.asarray(table["timestamp"], dtype=float)[v], raw_alt[v])
             break
 
-    return list(zip(gps_lat.tolist(), gps_lon.tolist(), alt.tolist()))
+    return gps_t, list(zip(gps_lat.tolist(), gps_lon.tolist(), alt.tolist()))
 
 
 def _extract_photo_positions(log_data: LogData) -> list[tuple[float, float, float, str]]:
@@ -191,7 +193,7 @@ def _gps_pos_at(log_data: LogData, t: float) -> Optional[tuple[float, float]]:
 
 def generate_kml(log_data: LogData, output_path: str) -> None:
     """Write a KML file with GPS track and photo markers."""
-    track = _extract_gps_track(log_data)
+    _, track = _extract_gps_track(log_data)
     photos = _extract_photo_positions(log_data)
 
     kml = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
@@ -255,6 +257,7 @@ def _build_map_images(
     log_data: LogData,
     want_full: bool,
     want_zoom: bool,
+    phase_dur: float = 120.0,
     include_photos: bool = False,
 ) -> dict[str, "PIL.Image.Image"]:
     """
@@ -267,14 +270,12 @@ def _build_map_images(
     if not (want_full or want_zoom):
         return images
 
-    track = _extract_gps_track(log_data)
+    gps_t, track = _extract_gps_track(log_data)
     if len(track) < 2:
         return images
 
     photos = _extract_photo_positions(log_data) if include_photos else []
     t_start, t_end = _flight_bounds(log_data)
-    flight_dur = max(t_end - t_start, 1.0)
-    phase_dur  = flight_dur * 0.20   # first/last 20 % of flight for close-up averages
 
     # Average wind per phase
     avg_w_takeoff = _avg_wind(log_data, t_start, t_start + phase_dur)
@@ -294,42 +295,57 @@ def _build_map_images(
     if not full_wind_pts and pos_takeoff and avg_w_full:
         full_wind_pts.append((*pos_takeoff, *avg_w_full, "Взлёт"))
 
+    # PDF display width in logical px (A4 190 mm content at 96 DPI / 72 pt)
+    _PDF_W = int(190.0 * 72.0 / 25.4 * 96.0 / 72.0)  # ≈ 717
+
     if want_full:
         img = render_map(
             track,
             photos=photos or None,
             wind_points=full_wind_pts or None,
             target_px=1600,
+            pdf_display_width=_PDF_W,
         )
         if img:
             images["map_full"] = img
 
     if want_zoom:
-        # Close-up: first / last 10 % of track, minimum 80 points
-        n = len(track)
-        slice_n = max(80, n // 10)
+        to_start = int(np.searchsorted(gps_t, t_start, side='left'))
+        to_end   = int(np.searchsorted(gps_t, t_start + phase_dur, side='right'))
+        to_end   = max(to_start + 20, to_end)
+        la_start = int(np.searchsorted(gps_t, t_end - phase_dur, side='left'))
+        la_end   = int(np.searchsorted(gps_t, t_end, side='right'))
+        la_start = max(0, min(la_start, la_end - 20))
 
-        # Takeoff close-up — arrow + info-box show average wind during takeoff phase
-        takeoff_track = track[:slice_n]
+        # Minimum guaranteed close-up span centered on ARM/DISARM point (+30% vs initial).
+        # Track beyond this span is still fully drawn (bbox is the union of both).
+        _CLOSEUP_SPAN = 0.013   # degrees (~1.45 km lat, ~830 m lon at 55 °N)
+
+        takeoff_track = track[to_start:to_end]
         to_wp: list = []
         if pos_takeoff and avg_w_takeoff:
             to_wp.append((*pos_takeoff, *avg_w_takeoff, "Фактический ветер"))
         img_to = render_map(takeoff_track,
                             photos=photos or None,
                             wind_points=to_wp or None,
-                            target_px=1600, padding_frac=0.25)
+                            target_px=1600,
+                            center_point=pos_takeoff,
+                            fixed_span_deg=_CLOSEUP_SPAN,
+                            pdf_display_width=_PDF_W)
         if img_to:
             images["map_takeoff"] = img_to
 
-        # Landing close-up — average wind during landing phase
-        landing_track = track[-slice_n:]
+        landing_track = track[la_start:la_end]
         la_wp: list = []
         if pos_landing and avg_w_landing:
             la_wp.append((*pos_landing, *avg_w_landing, "Фактический ветер"))
         img_la = render_map(landing_track,
                             photos=photos or None,
                             wind_points=la_wp or None,
-                            target_px=1600, padding_frac=0.25)
+                            target_px=1600,
+                            center_point=pos_landing,
+                            fixed_span_deg=_CLOSEUP_SPAN,
+                            pdf_display_width=_PDF_W)
         if img_la:
             images["map_landing"] = img_la
 
@@ -346,6 +362,8 @@ def _build_html(
     sections: set[str],
     log_filename: str,
     image_keys: set[str],   # which image resources are available
+    has_logo: bool = False,
+    img_width: int = 720,   # explicit px width for map images (matches doc textWidth)
 ) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     css = (
@@ -362,8 +380,13 @@ def _build_html(
         "tr:nth-child(even){background:#f0f4ff;}"
         ".cap{text-align:center;font-size:9pt;color:#666;margin-top:2px;}"
     )
+    logo_html = (
+        "<div style='text-align:center;margin-bottom:6px;'>"
+        "<img src='img://logo' height='60'/></div>"
+    ) if has_logo else ""
     parts = [
         f"<html><head><meta charset='utf-8'><style>{css}</style></head><body>",
+        logo_html,
         f"<h1>{title}</h1>",
         f"<p class='sub'>Файл: {log_filename}&nbsp;&nbsp;|&nbsp;&nbsp;Сформирован: {now}</p>",
     ]
@@ -372,13 +395,14 @@ def _build_html(
         return f"<tr><td>{label}</td><td>{value}</td></tr>"
 
     _PB = "page-break-before: always;"   # CSS page-break shorthand
+    _HR = "<hr style='border:none;border-top:1px solid #d0d8ee;margin:14px 0 4px 0;'/>"
 
     # ── общая карта сразу под заголовком (без переноса страницы) ─────────────
 
     if "map_full" in image_keys:
         parts += [
-            "<h2>Карта трека</h2>",
-            "<img src='img://map_full' width='500'/>",
+            f"{_HR}<h2>Карта трека</h2>",
+            f"<img src='img://map_full' width='{img_width}'/>",
             "<p class='cap'>&#9679; Взлёт (зелёный) &nbsp; &#9679; Посадка (красный)"
             " &nbsp; &#9658; Ветер при взлёте/посадке</p>",
         ]
@@ -387,7 +411,7 @@ def _build_html(
 
     if "time" in sections:
         parts += [
-            "<h2>Время</h2><table>",
+            f"{_HR}<h2>Время</h2><table>",
             row("Время начала миссии:", format_gps_datetime(stats.get("start_epoch", 0))),
             row("Время окончания:", format_gps_datetime(stats.get("end_epoch", 0))),
             row("Продолжительность:", stats.get("duration", "—")),
@@ -396,7 +420,7 @@ def _build_html(
 
     if "flight" in sections:
         parts += [
-            "<h2>Параметры полёта</h2><table>",
+            f"{_HR}<h2>Параметры полёта</h2><table>",
             row("Пройденное расстояние:", stats.get("distance", "—")),
             row("Время работы вертикальных моторов:", stats.get("vertical_motor_time", "—")),
             row("Время работы ходового мотора:", stats.get("forward_motor_time", "—")),
@@ -406,7 +430,7 @@ def _build_html(
 
     if "wind" in sections:
         parts += [
-            "<h2>Ветер</h2><table>",
+            f"{_HR}<h2>Ветер</h2><table>",
             row("Средний ветер:", stats.get("avg_wind", "—")),
             row("Максимальный ветер:", stats.get("max_wind", "—")),
             row("Преобладающее направление ветра:", stats.get("wind_dir", "—")),
@@ -415,15 +439,41 @@ def _build_html(
 
     if "attitude" in sections:
         parts += [
-            "<h2>Углы крена и тангажа</h2><table>",
+            f"{_HR}<h2>Углы крена и тангажа</h2><table>",
             row("Максимальный крен:", stats.get("max_roll", "—")),
             row("Максимальный тангаж:", stats.get("max_pitch", "—")),
+            row("Средний крен:", stats.get("avg_roll", "—")),
+            row("Средний тангаж:", stats.get("avg_pitch", "—")),
+            "</table>",
+        ]
+
+    if "altitude" in sections:
+        parts += [
+            f"{_HR}<h2>Высота</h2><table>",
+            row("Высота взлёта:", stats.get("takeoff_alt", "—")),
+            row("Высота посадки:", stats.get("landing_alt", "—")),
+            row("Средняя высота (гориз. полёт):", stats.get("avg_alt", "—")),
+            row("Средняя высота от рельефа:", stats.get("avg_terrain_agl", "—")),
+            row("Максимальная высота:", stats.get("max_alt", "—")),
+            row("Перепад высот рельефа:", stats.get("terrain_variation", "—")),
+            "</table>",
+        ]
+
+    if "speed" in sections:
+        parts += [
+            f"{_HR}<h2>Скорость</h2><table>",
+            row("Макс. земная скорость (гориз. полёт):", stats.get("max_fwd_gnd", "—")),
+            row("Макс. воздушная скорость (гориз. полёт):", stats.get("max_fwd_air", "—")),
+            row("Средняя земная скорость (гориз. полёт):", stats.get("avg_fwd_gnd", "—")),
+            row("Средняя воздушная скорость (гориз. полёт):", stats.get("avg_fwd_air", "—")),
+            row("Средняя земная скорость (по миссии):", stats.get("avg_mission_gnd", "—")),
+            row("Средняя воздушная скорость (по миссии):", stats.get("avg_mission_air", "—")),
             "</table>",
         ]
 
     if "photos" in sections:
         parts += [
-            "<h2>Фотосъёмка</h2><table>",
+            f"{_HR}<h2>Фотосъёмка</h2><table>",
             row("Кол-во фотоимпульсов в камеры:", stats.get("cam_count", "—")),
             row("Кол-во фотоимпульсов от камеры:", stats.get("trig_count", "—")),
             row("Среднее время между снимками:", stats.get("avg_photo_time", "—")),
@@ -433,7 +483,7 @@ def _build_html(
 
     if "efficiency" in sections:
         parts += [
-            "<h2>Эффективность</h2><table>",
+            f"{_HR}<h2>Эффективность</h2><table>",
             row("Общий расход на километр:", stats.get("overall_mah_per_km", "—")),
             row("Общий расход на минуту:", stats.get("overall_mah_per_min", "—")),
             row("Горизонтальный расход на километр:", stats.get("forward_mah_per_km", "—")),
@@ -444,7 +494,7 @@ def _build_html(
     if "battery" in sections:
         batteries = stats.get("batteries", [])
         if batteries:
-            parts.append("<h2>Батарея</h2>")
+            parts.append(f"{_HR}<h2>Батарея</h2>")
             for bat in batteries:
                 parts += [
                     f"<h3>Батарея {bat['index']}</h3><table>",
@@ -454,19 +504,27 @@ def _build_html(
                     "</table>",
                 ]
 
+    if "cog" in sections:
+        parts += [
+            f"{_HR}<h2>Центровка</h2><table>",
+            row("Центровка за весь полёт:", stats.get("cog_overall", "—")),
+            row("Центровка в горизонтальном полёте:", stats.get("cog_fwd", "—")),
+            "</table>",
+        ]
+
     # ── zoom-карты после текста (каждая на новой странице) ───────────────────
 
     if "map_takeoff" in image_keys:
         parts += [
-            f"<h2 style='{_PB}'>Взлёт (крупно)</h2>",
-            "<img src='img://map_takeoff' width='500'/>",
+            f"{_HR}<h2>Взлёт (крупно)</h2>",
+            f"<img src='img://map_takeoff' width='{img_width}'/>",
             "<p class='cap'>&#9679; Взлёт (зелёный) &nbsp; &#9658; Ветер при взлёте</p>",
         ]
 
     if "map_landing" in image_keys:
         parts += [
-            f"<h2 style='{_PB}'>Посадка (крупно)</h2>",
-            "<img src='img://map_landing' width='500'/>",
+            f"{_HR}<h2>Посадка (крупно)</h2>",
+            f"<img src='img://map_landing' width='{img_width}'/>",
             "<p class='cap'>&#9679; Посадка (красный) &nbsp; &#9658; Ветер при посадке</p>",
         ]
 
@@ -491,22 +549,46 @@ def generate_pdf(
     images: Optional[dict] = None,
 ) -> None:
     """Render the report as a PDF file at *output_path*."""
+    from PIL import Image as PilImage
     image_keys: set[str] = set(images.keys()) if images else set()
-    html = _build_html(title, stats, sections, log_filename, image_keys)
+
+    # Load logo if available
+    logo_pil = None
+    if _LOGO_PATH.exists():
+        try:
+            logo_pil = PilImage.open(_LOGO_PATH).convert("RGBA")
+        except Exception:
+            logo_pil = None
+
+    # A4 content width: 210mm – 2×10mm margins = 190mm → in points (1pt = 1/72 inch)
+    _MM_TO_PT = 72.0 / 25.4
+    content_w_pt = 190.0 * _MM_TO_PT          # ≈ 538 pt
+    # QTextDocument uses logical pixels at 96 DPI internally
+    img_width_px = int(content_w_pt * 96.0 / 72.0)   # ≈ 717 px
+
+    html = _build_html(title, stats, sections, log_filename, image_keys,
+                       has_logo=logo_pil is not None, img_width=img_width_px)
 
     writer = QPdfWriter(output_path)
     layout = QPageLayout(
         QPageSize(QPageSize.PageSizeId.A4),
         QPageLayout.Orientation.Portrait,
-        QMarginsF(15.0, 15.0, 15.0, 15.0),
+        QMarginsF(10.0, 10.0, 10.0, 10.0),
         QPageLayout.Unit.Millimeter,
     )
     writer.setPageLayout(layout)
     writer.setTitle(title)
 
     doc = QTextDocument()
+    doc.setTextWidth(img_width_px)   # tell the doc its usable width before setHtml
 
     # Register images before setHtml so they're available synchronously
+    if logo_pil is not None:
+        doc.addResource(
+            QTextDocument.ResourceType.ImageResource,
+            QUrl("img://logo"),
+            _pil_to_qimage(logo_pil),
+        )
     if images:
         for key, pil_img in images.items():
             q_img = _pil_to_qimage(pil_img)
@@ -550,11 +632,15 @@ class ReportDialog(QDialog):
         self._cb_flight   = QCheckBox("Параметры полёта")
         self._cb_wind     = QCheckBox("Ветер")
         self._cb_attitude = QCheckBox("Углы")
+        self._cb_altitude = QCheckBox("Высота")
+        self._cb_speed    = QCheckBox("Скорость")
         self._cb_photos   = QCheckBox("Фотосъёмка")
         self._cb_eff      = QCheckBox("Эффективность")
         self._cb_bat      = QCheckBox("Батарея")
+        self._cb_cog      = QCheckBox("Центровка")
         for cb in (self._cb_time, self._cb_flight, self._cb_wind,
-                   self._cb_attitude, self._cb_photos, self._cb_eff, self._cb_bat):
+                   self._cb_attitude, self._cb_altitude, self._cb_speed,
+                   self._cb_photos, self._cb_eff, self._cb_bat, self._cb_cog):
             cb.setChecked(True)
             data_layout.addWidget(cb)
         layout.addWidget(data_grp)
@@ -570,15 +656,42 @@ class ReportDialog(QDialog):
         self._cb_map_full.setChecked(True)
         self._cb_map_zoom.setChecked(True)
         self._cb_map_photos.setChecked(True)
-        # disable sub-option when both map checkboxes are off
-        def _update_photos_enabled():
+
+        # Duration combo for takeoff/landing close-ups
+        _PHASE_DURATIONS = [
+            ("30 сек",  30.0),
+            ("1 мин",   60.0),
+            ("2 мин",  120.0),
+            ("3 мин",  180.0),
+            ("5 мин",  300.0),
+            ("7 мин",  420.0),
+            ("10 мин", 600.0),
+            ("15 мин", 900.0),
+        ]
+        phase_dur_row = QHBoxLayout()
+        phase_dur_row.addSpacing(20)
+        phase_dur_row.addWidget(QLabel("    Длительность взлёта/посадки:"))
+        self._phase_dur_combo = QComboBox()
+        for label, val in _PHASE_DURATIONS:
+            self._phase_dur_combo.addItem(label, val)
+        self._phase_dur_combo.setCurrentIndex(4)  # default 5 мин
+
+        def _update_zoom_controls():
+            enabled = self._cb_map_zoom.isChecked()
+            self._phase_dur_combo.setEnabled(enabled)
             self._cb_map_photos.setEnabled(
-                self._cb_map_full.isChecked() or self._cb_map_zoom.isChecked()
+                self._cb_map_full.isChecked() or enabled
             )
-        self._cb_map_full.toggled.connect(_update_photos_enabled)
-        self._cb_map_zoom.toggled.connect(_update_photos_enabled)
+        self._cb_map_zoom.toggled.connect(_update_zoom_controls)
+        self._cb_map_full.toggled.connect(lambda: self._cb_map_photos.setEnabled(
+            self._cb_map_full.isChecked() or self._cb_map_zoom.isChecked()
+        ))
+        phase_dur_row.addWidget(self._phase_dur_combo)
+        phase_dur_row.addStretch()
+
         map_layout.addWidget(self._cb_map_full)
         map_layout.addWidget(self._cb_map_zoom)
+        map_layout.addLayout(phase_dur_row)
         map_layout.addWidget(self._cb_map_photos)
         layout.addWidget(map_grp)
 
@@ -625,9 +738,12 @@ class ReportDialog(QDialog):
         if self._cb_flight.isChecked():   s.add("flight")
         if self._cb_wind.isChecked():     s.add("wind")
         if self._cb_attitude.isChecked(): s.add("attitude")
+        if self._cb_altitude.isChecked(): s.add("altitude")
+        if self._cb_speed.isChecked():    s.add("speed")
         if self._cb_photos.isChecked():   s.add("photos")
         if self._cb_eff.isChecked():      s.add("efficiency")
         if self._cb_bat.isChecked():      s.add("battery")
+        if self._cb_cog.isChecked():      s.add("cog")
         return s
 
     def _on_generate(self):
@@ -643,7 +759,8 @@ class ReportDialog(QDialog):
         images: dict = {}
         if want_full or want_zoom:
             try:
-                images = _build_map_images(self._log_data, want_full, want_zoom, include_photos)
+                phase_dur = self._phase_dur_combo.currentData()
+                images = _build_map_images(self._log_data, want_full, want_zoom, phase_dur, include_photos)
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.warning(
                     self, "Предупреждение",
@@ -671,5 +788,15 @@ class ReportDialog(QDialog):
         msg = f"PDF отчёт сохранён:\n{pdf_path}"
         if kml_path:
             msg += f"\n\nKML трек:\n{kml_path}"
-        QMessageBox.information(self, "Отчёт сформирован", msg)
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Отчёт сформирован")
+        dlg.setText(msg)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        open_btn = dlg.addButton("Открыть папку", QMessageBox.ButtonRole.ActionRole)
+        dlg.addButton(QMessageBox.StandardButton.Ok)
+        dlg.exec()
+        if dlg.clickedButton() is open_btn:
+            import subprocess
+            subprocess.Popen(["explorer", os.path.normpath(self._out_dir)])
         self.accept()

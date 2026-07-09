@@ -4,7 +4,9 @@ Requires internet access to fetch the Leaflet library and Google map tiles.
 """
 from __future__ import annotations
 
+import base64
 import json
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
@@ -137,12 +139,11 @@ var failsafeIcon = L.divIcon({
     iconAnchor: [9, 9]
 });
 function buildVtolIcon(scale) {
-    var size = 32 * scale;
+    var size = 48 * scale;
     var half = size / 2;
     var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24">' +
         '<g transform="rotate(0 12 12)">' +
-        '<path d="M12 2 L13.2 9.2 L21 15 L21 16.8 L13 14.3 L13.6 19.2 L16 21 L16 22 L12 21 L8 22 L8 21 L10.4 19.2 L11 14.3 L3 16.8 L3 15 L10.8 9.2 Z" ' +
-        'fill="#e6194b" fill-opacity="0.35" stroke="#ffffff" stroke-width="1"/>' +
+        '<image href="' + defDataUri + '" x="0" y="0" width="24" height="24"/>' +
         '</g></svg>';
     return L.divIcon({
         html: html,
@@ -151,14 +152,65 @@ function buildVtolIcon(scale) {
         iconAnchor: [half, half]
     });
 }
+function buildVtol41Icon(scale) {
+    var size = 48 * scale;
+    var half = size / 2;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24">' +
+        '<g transform="rotate(0 12 12)">' +
+        '<image href="' + vtol41DataUri + '" x="0" y="0" width="24" height="24"/>' +
+        '</g></svg>';
+    return L.divIcon({
+        html: html,
+        className: 'vtol-icon',
+        iconSize: [size, size],
+        iconAnchor: [half, half]
+    });
+}
+function buildCopterIcon(scale) {
+    var size = 48 * scale;
+    var half = size / 2;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24">' +
+        '<g transform="rotate(0 12 12)">' +
+        '<image href="' + copterDataUri + '" x="0" y="0" width="24" height="24"/>' +
+        '</g></svg>';
+    return L.divIcon({html: html, className: 'vtol-icon', iconSize: [size, size], iconAnchor: [half, half]});
+}
+function buildVtol31Icon(scale) {
+    var size = 48 * scale;
+    var half = size / 2;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24">' +
+        '<g transform="rotate(0 12 12)">' +
+        '<image href="' + vtol31DataUri + '" x="0" y="0" width="24" height="24"/>' +
+        '</g></svg>';
+    return L.divIcon({html: html, className: 'vtol-icon', iconSize: [size, size], iconAnchor: [half, half]});
+}
+var vtol41DataUri = '';
+var copterDataUri = '';
+var vtol31DataUri = '';
+var defDataUri = '';
 var iconScale = 1;
 var lastHeading = 0;
-var vtolIcon = buildVtolIcon(iconScale);
+var currentVehicleType = 'plane';
+function _buildCurrentIcon(scale) {
+    if (currentVehicleType === 'vtol41') return buildVtol41Icon(scale);
+    if (currentVehicleType === 'copter') return buildCopterIcon(scale);
+    if (currentVehicleType === 'vtol31') return buildVtol31Icon(scale);
+    return buildVtolIcon(scale);
+}
+var vtolIcon = _buildCurrentIcon(iconScale);
 var marker = L.marker([0, 0], {icon: vtolIcon, draggable: true}).addTo(map);
 marker.bindTooltip('00:00', {permanent: true, direction: 'top', offset: [0, -10], className: 'time-tooltip'});
 function setIconScale(scale) {
     iconScale = scale;
-    vtolIcon = buildVtolIcon(iconScale);
+    vtolIcon = _buildCurrentIcon(iconScale);
+    marker.setIcon(vtolIcon);
+    var el = marker.getElement();
+    var g = el ? el.querySelector('g') : null;
+    if (g) g.setAttribute('transform', 'rotate(' + lastHeading + ' 12 12)');
+}
+function setVehicleType(type) {
+    currentVehicleType = type;
+    vtolIcon = _buildCurrentIcon(iconScale);
     marker.setIcon(vtolIcon);
     var el = marker.getElement();
     var g = el ? el.querySelector('g') : null;
@@ -532,6 +584,22 @@ class MapWidget(QWidget):
 
     def _on_load_finished(self, ok: bool):
         self._ready = ok
+        if ok:
+            assets = Path(__file__).resolve().parent.parent.parent / "assets"
+            for js_var, filename in (
+                ("vtol41DataUri", "vtol41_icon.svg"),
+                ("copterDataUri", "copter_icon.svg"),
+                ("vtol31DataUri", "vtol31_icon.svg"),
+                ("defDataUri",    "def_icon.svg"),
+            ):
+                try:
+                    uri = "data:image/svg+xml;base64," + base64.b64encode((assets / filename).read_bytes()).decode()
+                except Exception:
+                    uri = ""
+                self.view.page().runJavaScript(f"var {js_var} = '{uri}';")
+            self.view.page().runJavaScript(
+                "vtolIcon = _buildCurrentIcon(iconScale); marker.setIcon(vtolIcon);"
+            )
         for script in self._pending_js:
             self.view.page().runJavaScript(script)
         self._pending_js.clear()
@@ -541,6 +609,34 @@ class MapWidget(QWidget):
             self.view.page().runJavaScript(script)
         else:
             self._pending_js.append(script)
+
+    def set_vehicle_type(self, type_str: str):
+        js_type = {
+            "VTOL 4+1":        "vtol41",
+            "Коптер":          "copter",
+            "VTOL 2+1 vector": "vtol31",
+        }.get(type_str, "plane")
+        self._run_js(f"setVehicleType('{js_type}');")
+
+    def set_icon_mapping(self, mapping: dict[str, str]):
+        assets = Path(__file__).resolve().parent.parent.parent / "assets"
+        js_var_map = {
+            "VTOL 4+1":        "vtol41DataUri",
+            "Коптер":          "copterDataUri",
+            "VTOL 2+1 vector": "vtol31DataUri",
+            "По умолчанию":    "defDataUri",
+        }
+        for vtype, js_var in js_var_map.items():
+            filename = mapping.get(vtype)
+            if not filename:
+                continue
+            try:
+                import base64 as _b64
+                uri = "data:image/svg+xml;base64," + _b64.b64encode((assets / filename).read_bytes()).decode()
+            except Exception:
+                uri = ""
+            self._run_js(f"var {js_var} = '{uri}';")
+        self._run_js("vtolIcon = _buildCurrentIcon(iconScale); marker.setIcon(vtolIcon);")
 
     def set_time_origin(self, t0: float):
         self._t0 = t0

@@ -6,7 +6,7 @@ import numpy as np
 from pymavlink import mavutil
 from PySide6.QtWidgets import (
     QMainWindow, QFileDialog, QSplitter, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QMessageBox, QStatusBar, QProgressBar, QComboBox, QLabel, QPushButton, QFrame
+    QMessageBox, QStatusBar, QProgressBar, QComboBox, QLabel, QPushButton, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon
@@ -124,8 +124,15 @@ class MainWindow(QMainWindow):
         self.settings_widget.current_thresholds_changed.connect(self.attitude_panel.set_current_thresholds)
         self.settings_widget.speed_thresholds_changed.connect(self.attitude_panel.set_speed_thresholds)
         self.settings_widget.max_wind_changed.connect(self.map_widget.set_max_wind)
+        self.settings_widget.icon_mapping_changed.connect(self.attitude_panel.set_icon_mapping)
+        self.settings_widget.icon_mapping_changed.connect(self.map_widget.set_icon_mapping)
+        initial_mapping = self.settings_widget.get_icon_mapping()
+        self.attitude_panel.set_icon_mapping(initial_mapping)
+        self.map_widget.set_icon_mapping(initial_mapping)
         self.settings_widget.efficiency_thresholds_changed.connect(self.mission_analysis_widget.set_efficiency_thresholds)
         self.mission_analysis_widget.set_efficiency_thresholds(*self.settings_widget.get_efficiency_thresholds())
+        self.settings_widget.cog_thresholds_changed.connect(self.mission_analysis_widget.set_cog_thresholds)
+        self.mission_analysis_widget.set_cog_thresholds(*self.settings_widget.get_cog_thresholds())
         self.settings_widget.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.settings_widget.current_theme())
         self.settings_widget.timezone_changed.connect(self._on_timezone_changed)
@@ -293,15 +300,21 @@ class MainWindow(QMainWindow):
         self.mission_analysis_widget = MissionAnalysisWidget()
         self.photo_geotag_widget = PhotoGeotagWidget()
 
+        def _scroll_wrap(widget: QWidget) -> QScrollArea:
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setWidget(widget)
+            return sa
+
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(map_tab, "")
         self.right_tabs.addTab(graph_tab, "")
-        self.right_tabs.addTab(self.mission_analysis_widget, "")
+        self.right_tabs.addTab(_scroll_wrap(self.mission_analysis_widget), "")
         self.right_tabs.addTab(self.events_widget, "")
         self.right_tabs.addTab(self.params_widget, "")
         self.right_tabs.addTab(self.mission_widget, "")
-        self.right_tabs.addTab(self.photo_geotag_widget, "")
-        self.right_tabs.addTab(self.settings_widget, "")
+        self.right_tabs.addTab(_scroll_wrap(self.photo_geotag_widget), "")
+        self.right_tabs.addTab(_scroll_wrap(self.settings_widget), "")
         self.right_tabs.setCurrentIndex(0)
 
         i18n.register(self._retranslateUi)
@@ -425,6 +438,7 @@ class MainWindow(QMainWindow):
         self._load_photo_counts()
         self.map_widget.set_mission(self.mission_widget.waypoints())
         self.attitude_panel.set_mission_waypoints(self.mission_widget.waypoints())
+        self._load_cmd_waypoint_timeline()
 
         self.statusBar().showMessage(
             f"Loaded {path} — {len(self.log_data.message_types)} message types, "
@@ -433,6 +447,46 @@ class MainWindow(QMainWindow):
 
         if self.settings_widget.is_sound_alerts_enabled():
             self._load_done_sound.play()
+
+    def _load_cmd_waypoint_timeline(self):
+        if self.log_data is None:
+            return
+        cmd = self.log_data.messages.get("CMD")
+        if not cmd:
+            return
+        lat_key = next((k for k in ["Lat", "lat"] if k in cmd), None)
+        lon_key = next((k for k in ["Lng", "Lon", "lon"] if k in cmd), None)
+        if lat_key is None or lon_key is None:
+            return
+
+        # Find ARM time to skip mission-definition CMDs logged before flight
+        t_arm = None
+        ev = self.log_data.messages.get("EV")
+        if ev and "Id" in ev:
+            for i, v in enumerate(ev["Id"]):
+                if int(v) == 10:
+                    t_arm = ev["timestamp"][i]
+                    break
+
+        t_arr, lat_arr, lon_arr = [], [], []
+        for i in range(len(cmd["timestamp"])):
+            ct = cmd["timestamp"][i]
+            if t_arm is not None and ct <= t_arm:
+                continue
+            lat = cmd[lat_key][i]
+            lon = cmd[lon_key][i]
+            if lat == 0 and lon == 0:
+                continue
+            lat_deg = lat / 1e7 if abs(lat) > 1000 else float(lat)
+            lon_deg = lon / 1e7 if abs(lon) > 1000 else float(lon)
+            t_arr.append(ct)
+            lat_arr.append(lat_deg)
+            lon_arr.append(lon_deg)
+
+        if t_arr:
+            self.attitude_panel.set_cmd_waypoint_timeline(
+                np.array(t_arr), np.array(lat_arr), np.array(lon_arr)
+            )
 
     def _load_gps_track(self):
         if self.log_data is None:
@@ -711,17 +765,39 @@ class MainWindow(QMainWindow):
                 rudder_pwm = 1500.0 + ((left_pwm - 1500.0) - (right_pwm - 1500.0)) / 2.0
                 self.motor_servo_panel.set_pwm_series("Elevator", t, elevator_pwm)
                 self.motor_servo_panel.set_pwm_series("Rudder", t, rudder_pwm)
+                self.motor_servo_panel.set_surface_calibration(
+                    "Elevator", 1500.0, float(np.min(elevator_pwm)), float(np.max(elevator_pwm))
+                )
+                self.motor_servo_panel.set_surface_calibration(
+                    "Rudder", 1500.0, float(np.min(rudder_pwm)), float(np.max(rudder_pwm))
+                )
+
+        for label in ("Aileron", "Elevator", "Rudder"):
+            ch = channel_for_function.get(label)
+            if ch and rcou_table and f"C{ch}" in rcou_table:
+                trim = float(param_map.get(f"SERVO{ch}_TRIM", 1500.0))
+                pwm_arr = rcou_table[f"C{ch}"]
+                self.motor_servo_panel.set_surface_calibration(
+                    label, trim, float(np.min(pwm_arr)), float(np.max(pwm_arr))
+                )
 
         has_4_motors = all(k in channel_for_function for k in ("Motor1", "Motor2", "Motor3", "Motor4"))
+        has_2_motors = (
+            "Motor1" in channel_for_function and "Motor2" in channel_for_function
+            and "Motor3" not in channel_for_function and "Motor4" not in channel_for_function
+        )
         has_throttle = "Throttle" in channel_for_function
         has_vtail = "VTailLeft" in channel_for_function and "VTailRight" in channel_for_function
         if has_4_motors and has_throttle and has_vtail:
             vehicle_type = "VTOL 4+1"
+        elif has_2_motors and has_throttle:
+            vehicle_type = "VTOL 2+1 vector"
         elif has_4_motors:
-            vehicle_type = "Квадрокоптер"
+            vehicle_type = "Коптер"
         else:
             vehicle_type = "Неизвестен"
         self.attitude_panel.set_vehicle_type(vehicle_type)
+        self.map_widget.set_vehicle_type(vehicle_type)
 
     def _on_field_toggled(self, msg_type: str, field_name: str, checked: bool):
         key = f"{msg_type}.{field_name}"
@@ -762,6 +838,10 @@ class MainWindow(QMainWindow):
                     self.message_tree.set_field_checked(msg_type, field, True)
         elif preset_id == "battery1_vs_battery2":
             self._apply_battery_preset()
+        elif preset_id == "center_of_gravity":
+            table = self.log_data.messages.get("PIDP")
+            if table and "I" in table:
+                self.message_tree.set_field_checked("PIDP", "I", True)
 
     def _apply_battery_preset(self):
         bat_table = self.log_data.messages.get("BAT")

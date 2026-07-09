@@ -1,0 +1,9 @@
+{
+  "language": "ru",
+  "icon_mapping": {
+    "VTOL 4+1": "vtol41_icon.svg",
+    "VTOL 2+1 vector": "vtol31_icon.svg",
+    "Коптер": "copter_icon.svg",
+    "По умолчанию": "def_icon.svg"
+  }
+}
