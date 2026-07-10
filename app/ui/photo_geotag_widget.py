@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QFileDialog, QAbstractItemView, QSplitter, QMessageBox, QCheckBox,
     QListWidget, QListWidgetItem, QListView, QComboBox, QMenu, QDialog, QDialogButtonBox,
-    QApplication, QProgressDialog,
+    QApplication, QProgressDialog, QSlider, QSpinBox, QFormLayout,
 )
 
 from app.core import i18n
@@ -336,6 +336,8 @@ html,body,#map{height:100%;margin:0;padding:0;background:#222;}
     border-bottom:14px solid #e6194b;filter:drop-shadow(0 0 1px #fff);}
 .gnss-triangle-excluded{width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;
     border-bottom:14px solid #888888;filter:drop-shadow(0 0 1px #fff);opacity:0.7;}
+.gnss-triangle-highlighted{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;
+    border-bottom:20px solid #ffeb3b;filter:drop-shadow(0 0 3px #fff);}
 .map-legend{background:rgba(0,0,0,0.7);color:#fff;padding:6px 8px;border-radius:4px;
     font:11px "Segoe UI",sans-serif;line-height:1.7;}
 .legend-row{display:flex;align-items:center;gap:6px;white-space:nowrap;}
@@ -374,7 +376,15 @@ var gnssIconExcluded = L.divIcon({
     iconSize: [14, 14],
     iconAnchor: [7, 14]
 });
+var gnssIconHighlighted = L.divIcon({
+    className: 'gnss-triangle-icon',
+    html: '<div class="gnss-triangle-highlighted"></div>',
+    iconSize: [20, 20],
+    iconAnchor: [10, 20]
+});
 var gnssMarkers = [];
+var gnssExcludedSet = [];
+var highlightedGnssIndex = -1;
 var followEnabled = false;
 
 var legend = L.control({position: 'bottomright'});
@@ -469,9 +479,23 @@ function setGnssPoints(coords) {
 }
 
 function setGnssExcluded(excludedIndices) {
+    gnssExcludedSet = excludedIndices;
     gnssMarkers.forEach(function(m, i) {
+        if (i === highlightedGnssIndex) return;
         m.setIcon(excludedIndices.includes(i) ? gnssIconExcluded : gnssIcon);
     });
+}
+function highlightGnssPoint(idx) {
+    if (highlightedGnssIndex >= 0 && highlightedGnssIndex < gnssMarkers.length) {
+        gnssMarkers[highlightedGnssIndex].setIcon(
+            gnssExcludedSet.includes(highlightedGnssIndex) ? gnssIconExcluded : gnssIcon
+        );
+    }
+    highlightedGnssIndex = idx;
+    if (idx >= 0 && idx < gnssMarkers.length) {
+        gnssMarkers[idx].setIcon(gnssIconHighlighted);
+        gnssMarkers[idx].bringToFront();
+    }
 }
 </script>
 </body></html>
@@ -551,12 +575,296 @@ class _PhotoMapWidget(QWidget):
     def set_gnss_excluded(self, excluded_indices: list[int]):
         self._run_js(f"setGnssExcluded({json.dumps(excluded_indices)});")
 
+    def highlight_gnss_point(self, index: int):
+        self._run_js(f"highlightGnssPoint({index});")
+
     def set_follow(self, enabled: bool):
         self._run_js(f"setFollow({'true' if enabled else 'false'});")
 
     def _on_fit_toggled(self, checked: bool):
         if checked:
             self._run_js("fitAll();")
+
+
+_DELIMITERS = [
+    ("Авто",            None),
+    ("Запятая (,)",     ","),
+    ("Точка с зап. (;)", ";"),
+    ("Табуляция",       "\t"),
+    ("Пробел",          " "),
+    ("Вертикальная черта (|)", "|"),
+]
+_NONE_COL = "— нет —"
+
+
+class _GnssImportDialog(QDialog):
+    """Диалог настроек импорта GNSS-файла: разделитель, пропуск строк, назначение колонок."""
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Параметры импорта: {Path(path).name}")
+        mw = parent.window() if parent else None
+        w = mw.width() if mw else 900
+        self.resize(w, 540)
+        self._path = path
+        self._result: list[dict] | None = None
+
+        with open(path, encoding="utf-8-sig", errors="ignore") as fh:
+            self._all_lines = fh.readlines()
+
+        # ── Controls ──────────────────────────────────────────────────────────
+        self.delim_combo = QComboBox()
+        for label, _ in _DELIMITERS:
+            self.delim_combo.addItem(label)
+
+        self.comment_edit = QLabel()  # placeholder; replaced by real widget below
+        from PySide6.QtWidgets import QLineEdit
+        self.comment_edit = QLineEdit("#%")
+        self.comment_edit.setMaximumWidth(60)
+        self.comment_edit.setPlaceholderText("#%")
+
+        self.skip_slider = QSlider(Qt.Horizontal)
+        self.skip_slider.setRange(0, 30)
+        self.skip_slider.setValue(0)
+        self.skip_spin = QSpinBox()
+        self.skip_spin.setRange(0, 30)
+        self.skip_spin.setValue(0)
+        self.skip_spin.setMaximumWidth(60)
+
+        # ── Settings row ─────────────────────────────────────────────────────
+        settings = QHBoxLayout()
+        settings.addWidget(QLabel("Разделитель:"))
+        settings.addWidget(self.delim_combo)
+        settings.addSpacing(16)
+        settings.addWidget(QLabel("Ком. символы:"))
+        settings.addWidget(self.comment_edit)
+        settings.addSpacing(16)
+        settings.addWidget(QLabel("Пропустить строк:"))
+        settings.addWidget(self.skip_slider)
+        settings.addWidget(self.skip_spin)
+        settings.addStretch()
+
+        # ── Preview table ─────────────────────────────────────────────────────
+        self.preview_table = QTableWidget()
+        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview_table.verticalHeader().setVisible(True)
+        self.preview_table.setMinimumHeight(160)
+        self.preview_table.setMaximumHeight(220)
+
+        # ── Column assignment ─────────────────────────────────────────────────
+        self.lat_combo  = QComboBox()
+        self.lon_combo  = QComboBox()
+        self.alt_combo  = QComboBox()
+        self.name_combo = QComboBox()
+
+        col_form = QFormLayout()
+        col_form.setHorizontalSpacing(12)
+        col_form.setVerticalSpacing(4)
+        col_row1 = QHBoxLayout()
+        col_row1.addWidget(QLabel("Широта:"))
+        col_row1.addWidget(self.lat_combo)
+        col_row1.addSpacing(20)
+        col_row1.addWidget(QLabel("Долгота:"))
+        col_row1.addWidget(self.lon_combo)
+        col_row1.addSpacing(20)
+        col_row1.addWidget(QLabel("Высота:"))
+        col_row1.addWidget(self.alt_combo)
+        col_row1.addSpacing(20)
+        col_row1.addWidget(QLabel("Имя / файл:"))
+        col_row1.addWidget(self.name_combo)
+        col_row1.addStretch()
+
+        self.row_count_label = QLabel()
+
+        # ── Buttons ───────────────────────────────────────────────────────────
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._ok_btn = buttons.button(QDialogButtonBox.Ok)
+        self._ok_btn.setText("Импортировать")
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.accepted.connect(self._on_accepted)
+        buttons.rejected.connect(self.reject)
+
+        # ── Layout ────────────────────────────────────────────────────────────
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"<b>Файл:</b> {path}"))
+        layout.addLayout(settings)
+        layout.addWidget(QLabel("Предпросмотр данных:"))
+        layout.addWidget(self.preview_table)
+        layout.addLayout(col_row1)
+        layout.addWidget(self.row_count_label)
+        layout.addWidget(buttons)
+
+        # ── Signals ───────────────────────────────────────────────────────────
+        self.delim_combo.currentIndexChanged.connect(self._refresh)
+        self.comment_edit.textChanged.connect(self._refresh)
+        self.skip_slider.valueChanged.connect(self.skip_spin.setValue)
+        self.skip_spin.valueChanged.connect(self.skip_slider.setValue)
+        self.skip_spin.valueChanged.connect(self._refresh)
+
+        self._refresh()
+
+    # ── Parsing helpers ───────────────────────────────────────────────────────
+
+    def _comment_chars(self) -> str:
+        return self.comment_edit.text().strip()
+
+    def _delimiter(self) -> str | None:
+        return _DELIMITERS[self.delim_combo.currentIndex()][1]
+
+    def _effective_lines(self) -> list[str]:
+        skip = self.skip_spin.value()
+        cc = self._comment_chars()
+        result = []
+        for line in self._all_lines[skip:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if cc and stripped[0] in cc:
+                continue
+            result.append(stripped)
+        return result
+
+    def _parse_to_rows(self) -> tuple[list[str], list[list[str]]]:
+        """Returns (headers, data_rows) as raw string lists."""
+        lines = self._effective_lines()
+        if not lines:
+            return [], []
+
+        delim = self._delimiter()
+        if delim is None:
+            try:
+                dialect = csv.Sniffer().sniff("\n".join(lines[:5]), delimiters=",;\t |")
+                reader = list(csv.reader(lines, dialect))
+            except csv.Error:
+                reader = list(csv.reader(lines))
+        elif delim == " ":
+            reader = [l.split() for l in lines]
+        else:
+            reader = list(csv.reader(lines, delimiter=delim))
+
+        if not reader:
+            return [], []
+        headers = [h.strip() for h in reader[0]]
+        data = reader[1:]
+        return headers, data
+
+    # ── UI update ─────────────────────────────────────────────────────────────
+
+    def _refresh(self):
+        headers, data = self._parse_to_rows()
+
+        # Preview table
+        self.preview_table.setColumnCount(len(headers))
+        self.preview_table.setHorizontalHeaderLabels(headers)
+        show = min(10, len(data))
+        self.preview_table.setRowCount(show)
+        for r in range(show):
+            row = data[r]
+            for c in range(len(headers)):
+                val = row[c].strip() if c < len(row) else ""
+                self.preview_table.setItem(r, c, QTableWidgetItem(val))
+        self.preview_table.resizeColumnsToContents()
+
+        self._update_col_combos(headers)
+        total = len(data)
+        self.row_count_label.setText(f"Строк данных: {total}")
+        self._ok_btn.setEnabled(total > 0 and bool(headers))
+
+    def _update_col_combos(self, headers: list[str]):
+        hl = [h.lower() for h in headers]
+
+        def best(candidates) -> int:
+            for cand in candidates:
+                for i, h in enumerate(hl):
+                    if cand == h:
+                        return i
+            for cand in candidates:
+                for i, h in enumerate(hl):
+                    if cand in h:
+                        return i
+            return -1
+
+        lat_i  = best(_GNSS_LAT_CANDIDATES)
+        lon_i  = best(_GNSS_LON_CANDIDATES)
+        alt_i  = best(_GNSS_ALT_CANDIDATES)
+        name_i = best(_GNSS_NAME_CANDIDATES)
+
+        for combo in (self.lat_combo, self.lon_combo, self.alt_combo, self.name_combo):
+            combo.blockSignals(True)
+            prev = combo.currentText()
+            combo.clear()
+
+        self.alt_combo.addItem(_NONE_COL)
+        self.name_combo.addItem(_NONE_COL)
+
+        for h in headers:
+            for combo in (self.lat_combo, self.lon_combo, self.alt_combo, self.name_combo):
+                combo.addItem(h)
+
+        # Restore or auto-select
+        def try_restore(combo, prev_text, auto_idx, offset=0):
+            idx = combo.findText(prev_text)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            elif auto_idx >= 0:
+                combo.setCurrentIndex(auto_idx + offset)
+
+        try_restore(self.lat_combo,  self.lat_combo.currentText(),  lat_i)
+        try_restore(self.lon_combo,  self.lon_combo.currentText(),  lon_i)
+        try_restore(self.alt_combo,  self.alt_combo.currentText(),  alt_i,  1)
+        try_restore(self.name_combo, self.name_combo.currentText(), name_i, 1)
+
+        for combo in (self.lat_combo, self.lon_combo, self.alt_combo, self.name_combo):
+            combo.blockSignals(False)
+
+    # ── Accept ────────────────────────────────────────────────────────────────
+
+    def _on_accepted(self):
+        headers, data = self._parse_to_rows()
+        if not headers or not data:
+            QMessageBox.warning(self, "Ошибка", "Файл не удалось разобрать. Измените настройки разделителя или пропуска строк.")
+            return
+
+        h_idx = {h: i for i, h in enumerate(headers)}
+        lat_col  = self.lat_combo.currentText()
+        lon_col  = self.lon_combo.currentText()
+        alt_col  = self.alt_combo.currentText()
+        name_col = self.name_combo.currentText()
+
+        lat_i  = h_idx.get(lat_col)
+        lon_i  = h_idx.get(lon_col)
+        alt_i  = h_idx.get(alt_col) if alt_col != _NONE_COL else None
+        name_i = h_idx.get(name_col) if name_col != _NONE_COL else None
+
+        if lat_i is None or lon_i is None:
+            QMessageBox.warning(self, "Ошибка", "Не найдены колонки широты или долготы.")
+            return
+
+        points: list[dict] = []
+        for idx, row in enumerate(data):
+            try:
+                lat = float(row[lat_i])
+                lon = float(row[lon_i])
+            except (IndexError, ValueError):
+                continue
+            alt = None
+            if alt_i is not None:
+                try:
+                    alt = float(row[alt_i])
+                except (IndexError, ValueError):
+                    pass
+            name = (row[name_i].strip() if name_i is not None and name_i < len(row) else "") or f"#{idx + 1}"
+            points.append({"name": name, "lat": lat, "lon": lon, "alt": alt})
+
+        if not points:
+            QMessageBox.warning(self, "Ошибка", "Не удалось извлечь ни одной точки. Проверьте назначение колонок.")
+            return
+
+        self._result = points
+        self.accept()
+
+    def result_points(self) -> list[dict] | None:
+        return self._result
 
 
 class _PhotoFolderPanel(QWidget):
@@ -866,7 +1174,12 @@ class PhotoGeotagWidget(QWidget):
         self.gnss_table.horizontalHeader().setStretchLastSection(True)
         self.gnss_table.verticalHeader().setVisible(False)
         self.gnss_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.gnss_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.gnss_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.gnss_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.gnss_table.setMouseTracking(True)
+        self.gnss_table.viewport().setMouseTracking(True)
+        self.gnss_table.cellEntered.connect(self._on_gnss_cell_entered)
+        self.gnss_table.viewport().installEventFilter(self)
         self.gnss_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.gnss_table.customContextMenuRequested.connect(self._on_gnss_context_menu)
 
@@ -926,8 +1239,11 @@ class PhotoGeotagWidget(QWidget):
         self.gnss_table.setHorizontalHeaderLabels([tr(c) for c in _GNSS_COLUMNS])
 
     def eventFilter(self, watched, event):
-        if watched is self.table.viewport() and event.type() == event.Type.Leave:
-            self._clear_table_highlight()
+        if event.type() == event.Type.Leave:
+            if watched is self.table.viewport():
+                self._clear_table_highlight()
+            elif watched is self.gnss_table.viewport():
+                self._clear_gnss_highlight()
         return super().eventFilter(watched, event)
 
     def _on_table_cell_entered(self, row: int, column: int):
@@ -941,6 +1257,12 @@ class PhotoGeotagWidget(QWidget):
             return
         self._highlighted_row = -1
         self.map.highlight_point(-1)
+
+    def _on_gnss_cell_entered(self, row: int, _col: int):
+        self.map.highlight_gnss_point(row)
+
+    def _clear_gnss_highlight(self):
+        self.map.highlight_gnss_point(-1)
 
     def _on_marker_hovered(self, index: int):
         if index < 0 or index >= self.table.rowCount():
@@ -1121,15 +1443,14 @@ class PhotoGeotagWidget(QWidget):
         if not path:
             return
         try:
-            points = self._parse_gnss_csv(path) or self._parse_rtklib_pos(path)
+            dlg = _GnssImportDialog(path, self)
         except OSError as e:
             QMessageBox.warning(self, tr("Ошибка чтения файла"), str(e))
             return
+        if dlg.exec() != QDialog.Accepted:
+            return
+        points = dlg.result_points()
         if not points:
-            QMessageBox.warning(
-                self, tr("Не удалось распознать файл"),
-                "В файле не найдены столбцы широты/долготы (Lat/Lon, Latitude/Longitude и т.п.)."
-            )
             return
 
         self._gnss_points = [(p["lat"], p["lon"]) for p in points]
@@ -1194,16 +1515,24 @@ class PhotoGeotagWidget(QWidget):
         row = self.gnss_table.rowAt(pos.y())
         if row < 0:
             return
+        selected = {idx.row() for idx in self.gnss_table.selectedIndexes()}
+        target = selected if row in selected and len(selected) > 1 else {row}
+        any_included = any(r not in self._gnss_excluded for r in target)
+        tr = i18n.tr
+        if len(target) > 1:
+            action_text = tr("Исключить выбранные точки") if any_included else tr("Включить выбранные точки")
+        else:
+            action_text = tr("Включить точку") if row in self._gnss_excluded else tr("Исключить точку")
         menu = QMenu(self)
-        action_text = i18n.tr("Включить точку") if row in self._gnss_excluded else i18n.tr("Исключить точку")
         action = menu.addAction(action_text)
         chosen = menu.exec(self.gnss_table.viewport().mapToGlobal(pos))
         if chosen == action:
-            if row in self._gnss_excluded:
-                self._gnss_excluded.discard(row)
-            else:
-                self._gnss_excluded.add(row)
-            self._apply_gnss_row_style(row)
+            for r in target:
+                if any_included:
+                    self._gnss_excluded.add(r)
+                else:
+                    self._gnss_excluded.discard(r)
+                self._apply_gnss_row_style(r)
             self._update_gnss_label()
             self.map.set_gnss_excluded(sorted(self._gnss_excluded))
 

@@ -198,6 +198,29 @@ def load_log(path: str | Path, progress_callback: Callable[[int], None] | None =
         del table
         messages[msg_type] = converted
 
+    # Split known multi-instance message types into separate virtual entries
+    # (e.g. BAT[0]/BAT[1], GPS[0]/GPS[1]) so each instance can be graphed independently.
+    _INSTANCE_FIELDS: dict[str, str] = {
+        "BAT": "Inst", "BATT": "Inst",
+        "GPS": "I", "GPA": "I",
+        "BARO": "I",
+        "IMU": "I",
+        "MAG": "I",
+    }
+    for msg_type, inst_field in _INSTANCE_FIELDS.items():
+        table = messages.get(msg_type)
+        if table is None:
+            continue
+        inst_arr = table.get(inst_field)
+        if inst_arr is None or not np.issubdtype(inst_arr.dtype, np.number):
+            continue
+        unique_insts = sorted(set(inst_arr.astype(int).tolist()))
+        if len(unique_insts) <= 1:
+            continue
+        for inst in unique_insts:
+            mask = inst_arr == inst
+            messages[f"{msg_type}[{inst}]"] = {k: v[mask] for k, v in table.items()}
+
     return LogData(
         path=path,
         messages=messages,

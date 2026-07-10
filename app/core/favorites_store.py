@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import json
 
-from app.core.tile_cache import get_app_dir
+from app.core.paths import get_user_data_dir
 
 _FAVORITES_FILENAME = "favorites.json"
 _RENAMES_FILENAME = "renames.json"
 
 
 def _get_path():
-    return get_app_dir() / _FAVORITES_FILENAME
+    return get_user_data_dir() / _FAVORITES_FILENAME
 
 
 def _get_renames_path():
-    return get_app_dir() / _RENAMES_FILENAME
+    return get_user_data_dir() / _RENAMES_FILENAME
 
 
 def load_favorites() -> set[tuple[str, str]]:

@@ -153,17 +153,15 @@ class BatteryGauge(QWidget):
         self._min = 0.0
         self._max = 1.0
         self._cell_count = cell_count
-        self._is_hv = False  # LiHV mode
+        self._chemistry = "lipo"  # "lipo"=4.20V | "lihv"=4.35V | "liuhv"=4.40V
 
-    def set_hv_mode(self, is_hv: bool):
-        """Enable/disable LiHV high voltage mode."""
-        self._is_hv = is_hv
+    def set_chemistry(self, chemistry: str):
+        self._chemistry = chemistry
         self.update()
 
     @property
     def _full_voltage(self) -> float:
-        """Return full charge voltage per cell."""
-        return 4.35 if self._is_hv else 4.2
+        return {"lipo": 4.2, "lihv": 4.35, "liuhv": 4.4}.get(self._chemistry, 4.2)
 
     @property
     def _empty_voltage(self) -> float:

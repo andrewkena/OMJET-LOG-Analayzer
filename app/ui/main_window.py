@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import QApplication
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 
 from app.core import tile_cache, i18n
+from app.core.paths import get_user_data_dir
+_SETTINGS_FILE = get_user_data_dir() / "user_settings.json"
 from app.core.version import APP_VERSION
 from app.core.log_loader import LogData
 from app.core.log_load_worker import LogLoadWorker
@@ -32,6 +35,7 @@ from app.ui.rc_panel import RCPanel
 from app.ui.attitude_panel import AttitudePanel
 from app.ui.motor_servo_panel import MotorServoPanel
 from app.ui.settings_widget import SettingsWidget
+from app.ui.link_quality_widget import LinkQualityWidget
 from app.ui.theme import apply_dark_theme, apply_light_theme, apply_system_theme
 from app.core.time_format import set_utc_offset_hours, format_mmss
 from app.core.event_decoder import decode_event, decode_error
@@ -50,6 +54,13 @@ ATTITUDE_CANDIDATES = [
 ]
 # (msg_type, field, divisor) -> value in m/s
 AIRSPEED_CANDIDATES = [("ARSP", "Airspeed", 1.0), ("VFR_HUD", "airspeed", 1.0)]
+# (msg_type, rssi_field, label)  – ordered by preference
+RSSI_CANDIDATES = [
+    ("RSSI",        "RSSI",   "RSSI (встроенный приёмник)"),
+    ("RC_CHANNELS", "rssi",   "RSSI (RC_CHANNELS)"),
+    ("RADIO",       "rssi",   "RSSI (радиомодем SiK, local)"),
+    ("RADIO_STATUS","rssi",   "RSSI (RADIO_STATUS)"),
+]
 # (msg_type, field, divisor) -> value in m/s
 GROUND_SPEED_CANDIDATES = [("GPS", "Spd", 1.0), ("VFR_HUD", "groundspeed", 1.0)]
 # (msg_type, field, divisor) -> value in meters
@@ -73,6 +84,18 @@ def _battery_by_instance(table, instance: int):
             return None
         return table["timestamp"][mask], table["Volt"][mask], table["Curr"][mask]
     return (table["timestamp"], table["Volt"], table["Curr"]) if instance == 0 else None
+
+
+def _gps_by_instance(table, instance: int):
+    """Splits GPS table (multi-instance via field 'I') into one receiver's NSats/HDop series."""
+    if not table or "NSats" not in table or "HDop" not in table:
+        return None
+    if "I" in table:
+        mask = table["I"] == float(instance)
+        if not np.any(mask):
+            return None
+        return table["timestamp"][mask], table["NSats"][mask], table["HDop"][mask]
+    return (table["timestamp"], table["NSats"], table["HDop"]) if instance == 0 else None
 # ArduPilot SRV_Channel::Function ids for SERVOx_FUNCTION parameters
 SERVO_FUNCTION_IDS = {
     "Aileron": 4, "Elevator": 19, "Rudder": 21, "Throttle": 70,
@@ -120,7 +143,7 @@ class MainWindow(QMainWindow):
     def _connect_settings_signals(self):
         """Connect settings signals to attitude panel."""
         self.settings_widget.battery_cell_count_changed.connect(self.attitude_panel.set_battery_cell_count)
-        self.settings_widget.battery_hv_changed.connect(self.attitude_panel.set_battery_hv_mode)
+        self.settings_widget.battery_chemistry_changed.connect(self.attitude_panel.set_battery_chemistry)
         self.settings_widget.current_thresholds_changed.connect(self.attitude_panel.set_current_thresholds)
         self.settings_widget.speed_thresholds_changed.connect(self.attitude_panel.set_speed_thresholds)
         self.settings_widget.max_wind_changed.connect(self.map_widget.set_max_wind)
@@ -133,6 +156,11 @@ class MainWindow(QMainWindow):
         self.mission_analysis_widget.set_efficiency_thresholds(*self.settings_widget.get_efficiency_thresholds())
         self.settings_widget.cog_thresholds_changed.connect(self.mission_analysis_widget.set_cog_thresholds)
         self.mission_analysis_widget.set_cog_thresholds(*self.settings_widget.get_cog_thresholds())
+        self.settings_widget.callout_style_changed.connect(self.map_widget.set_callout_style)
+        self.settings_widget.callout_fields_changed.connect(self.map_widget.set_callout_fields)
+        style, show_t, show_s, show_d = self.settings_widget.get_callout_settings()
+        self.map_widget.set_callout_style(style)
+        self.map_widget.set_callout_fields(show_t, show_s, show_d)
         self.settings_widget.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.settings_widget.current_theme())
         self.settings_widget.timezone_changed.connect(self._on_timezone_changed)
@@ -140,6 +168,8 @@ class MainWindow(QMainWindow):
         self.attitude_panel.set_battery_cell_count(self.settings_widget.get_battery_cell_count())
         self.attitude_panel.set_current_thresholds(*self.settings_widget.get_current_thresholds())
         self.attitude_panel.set_speed_thresholds(*self.settings_widget.get_speed_thresholds())
+        self.attitude_panel.set_battery_chemistry(1, self.settings_widget.get_battery_chemistry(1))
+        self.attitude_panel.set_battery_chemistry(2, self.settings_widget.get_battery_chemistry(2))
 
         if self._tile_handler is not None:
             self._tile_handler.cache_limit_exceeded.connect(self._on_cache_limit_exceeded)
@@ -200,13 +230,24 @@ class MainWindow(QMainWindow):
         graph_tab_layout.addLayout(target_row)
         graph_splitter = QSplitter(Qt.Vertical)
         self.graph_labels: list[QLabel] = []
+        self.graph_clear_btns: list[QPushButton] = []
         for i, graph in enumerate(self.graphs):
             wrapper = QWidget()
             wrapper_layout = QVBoxLayout(wrapper)
             wrapper_layout.setContentsMargins(0, 0, 0, 0)
+            wrapper_layout.setSpacing(0)
+            header_row = QHBoxLayout()
+            header_row.setContentsMargins(0, 0, 0, 0)
             lbl = QLabel()
             self.graph_labels.append(lbl)
-            wrapper_layout.addWidget(lbl)
+            header_row.addWidget(lbl)
+            header_row.addStretch()
+            clear_btn = QPushButton()
+            clear_btn.setFixedWidth(110)
+            clear_btn.clicked.connect(lambda _=False, idx=i: self._clear_graph(idx))
+            self.graph_clear_btns.append(clear_btn)
+            header_row.addWidget(clear_btn)
+            wrapper_layout.addLayout(header_row)
             wrapper_layout.addWidget(graph)
             graph_splitter.addWidget(wrapper)
         graph_tab_layout.addWidget(graph_splitter)
@@ -282,6 +323,8 @@ class MainWindow(QMainWindow):
         playback_row.addWidget(icon_size_separator)
         playback_row.addWidget(self.map_widget.icon_size_label)
         playback_row.addWidget(self.map_widget.icon_size_combo)
+        playback_row.addSpacing(12)
+        playback_row.addWidget(self.map_widget.measure_btn)
         playback_row.addStretch()
 
         map_tab = QWidget()
@@ -306,10 +349,13 @@ class MainWindow(QMainWindow):
             sa.setWidget(widget)
             return sa
 
+        self.link_quality_widget = LinkQualityWidget()
+
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(map_tab, "")
         self.right_tabs.addTab(graph_tab, "")
         self.right_tabs.addTab(_scroll_wrap(self.mission_analysis_widget), "")
+        self.right_tabs.addTab(self.link_quality_widget, "")
         self.right_tabs.addTab(self.events_widget, "")
         self.right_tabs.addTab(self.params_widget, "")
         self.right_tabs.addTab(self.mission_widget, "")
@@ -360,6 +406,8 @@ class MainWindow(QMainWindow):
         )
         for i, lbl in enumerate(self.graph_labels):
             lbl.setText(f"{tr('График')} {i + 1}")
+        for btn in self.graph_clear_btns:
+            btn.setText(tr("Очистить график"))
         self.target_graph_combo.blockSignals(True)
         current_idx = self.target_graph_combo.currentIndex()
         self.target_graph_combo.clear()
@@ -373,7 +421,7 @@ class MainWindow(QMainWindow):
         self.speed_label.setText(tr("Скорость:"))
         self.basemap_type_label.setText(tr("Тип:"))
         _tab_titles = [
-            "Карта", "Графики", "Анализ миссии", "События",
+            "Карта", "Графики", "Анализ миссии", "Качество связи", "События",
             "Параметры полетного контроллера", "Полетное задание",
             "Геотегирование фотографий", "Настройки",
         ]
@@ -381,8 +429,9 @@ class MainWindow(QMainWindow):
             self.right_tabs.setTabText(i, tr(title))
 
     def open_log_dialog(self):
+        start_dir = self._load_last_log_dir()
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open ArduPilot Log", "",
+            self, "Open ArduPilot Log", start_dir,
             "ArduPilot Logs (*.bin *.log *.tlog);;All Files (*)"
         )
         if path:
@@ -401,6 +450,24 @@ class MainWindow(QMainWindow):
         self._worker.failed.connect(self._on_log_load_failed)
         self._worker.start()
 
+    def _load_last_log_dir(self) -> str:
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            return data.get("last_log_dir", "")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return ""
+
+    def _save_last_log_dir(self, path: str):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data["last_log_dir"] = str(Path(path).parent)
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
     def _on_log_load_failed(self, message: str):
         self.progress_bar.hide()
         self.statusBar().clearMessage()
@@ -409,6 +476,7 @@ class MainWindow(QMainWindow):
     def _on_log_loaded(self, path: str, log_data: LogData):
         self.progress_bar.hide()
         self.playback_timer.stop()
+        self._save_last_log_dir(path)
         self.log_data = log_data
         self._current_time = log_data.start_time
 
@@ -436,6 +504,7 @@ class MainWindow(QMainWindow):
         self._load_battery_gauges()
         self._load_motor_servo_panel()
         self._load_photo_counts()
+        self._load_link_quality()
         self.map_widget.set_mission(self.mission_widget.waypoints())
         self.attitude_panel.set_mission_waypoints(self.mission_widget.waypoints())
         self._load_cmd_waypoint_timeline()
@@ -501,6 +570,18 @@ class MainWindow(QMainWindow):
                     lon = lon / 1e7
                 self.map_widget.set_track(table["timestamp"], lat, lon)
                 self.attitude_panel.set_position_data(table["timestamp"], lat, lon)
+                spd_key = next((k for k in ("Spd", "speed", "groundspeed") if k in table), None)
+                if spd_key is not None:
+                    self.map_widget.set_map_speed_data(table["timestamp"], table[spd_key])
+                else:
+                    self.map_widget.clear_map_speed_data()
+                for _msg, _fld, _div in AIRSPEED_CANDIDATES:
+                    _at = self.log_data.messages.get(_msg)
+                    if _at and _fld in _at and len(_at[_fld]):
+                        self.map_widget.set_map_airspeed_data(_at["timestamp"], np.asarray(_at[_fld]) / _div)
+                        break
+                else:
+                    self.map_widget.clear_map_airspeed_data()
                 return
 
     def _load_flight_modes(self):
@@ -623,6 +704,48 @@ class MainWindow(QMainWindow):
         self.timeline_widget.set_range(
             self.log_data.start_time, self.log_data.end_time, backdrop_t, backdrop_y, terrain_t, terrain_y
         )
+
+    def _load_link_quality(self):
+        if self.log_data is None:
+            self.link_quality_widget.clear()
+            return
+
+        # Find GPS track
+        gps_t = gps_lat = gps_lon = None
+        for msg_type, lat_f, lon_f in GPS_LAT_CANDIDATES:
+            table = self.log_data.messages.get(msg_type)
+            if table and lat_f in table and lon_f in table:
+                lat = np.asarray(table[lat_f], dtype=float)
+                lon = np.asarray(table[lon_f], dtype=float)
+                if msg_type == "GLOBAL_POSITION_INT":
+                    lat /= 1e7
+                    lon /= 1e7
+                gps_t = np.asarray(table["timestamp"], dtype=float)
+                gps_lat, gps_lon = lat, lon
+                break
+
+        if gps_t is None or len(gps_t) < 2:
+            self.link_quality_widget.clear()
+            return
+
+        # Find RSSI data
+        for msg_type, rssi_field, label in RSSI_CANDIDATES:
+            table = self.log_data.messages.get(msg_type)
+            if table and rssi_field in table:
+                rssi_v = np.asarray(table[rssi_field], dtype=float)
+                if not len(rssi_v):
+                    continue
+                rssi_t = np.asarray(table["timestamp"], dtype=float)
+                # Auto-detect scale: ArduPilot uses 0-255; ExpressLRS/ELRS uses 0-100
+                raw_max = float(rssi_v.max())
+                rssi_max = 100.0 if raw_max <= 100.0 else 255.0
+                self.link_quality_widget.load(
+                    gps_t, gps_lat, gps_lon,
+                    rssi_t, rssi_v, rssi_max, label
+                )
+                return
+
+        self.link_quality_widget.clear()
 
     def _load_rc_panel(self):
         if self.log_data is None:
@@ -799,6 +922,13 @@ class MainWindow(QMainWindow):
         self.attitude_panel.set_vehicle_type(vehicle_type)
         self.map_widget.set_vehicle_type(vehicle_type)
 
+    def _clear_graph(self, graph_idx: int):
+        keys = [k for k, v in list(self._field_graph_assignment.items()) if v == graph_idx]
+        for key in keys:
+            msg_type, field_name = key.split(".", 1)
+            self.message_tree.set_field_checked(msg_type, field_name, False)
+        self.graphs[graph_idx].clear_all()
+
     def _on_field_toggled(self, msg_type: str, field_name: str, checked: bool):
         key = f"{msg_type}.{field_name}"
         if checked:
@@ -842,6 +972,42 @@ class MainWindow(QMainWindow):
             table = self.log_data.messages.get("PIDP")
             if table and "I" in table:
                 self.message_tree.set_field_checked("PIDP", "I", True)
+        elif preset_id == "gps1_vs_gps2":
+            self._apply_gps_preset()
+
+    def _apply_gps_preset(self):
+        gps_table = self.log_data.messages.get("GPS")
+        gps2_table = self.log_data.messages.get("GPS2")
+
+        gps1 = _gps_by_instance(gps_table, 0)
+        gps2 = _gps_by_instance(gps_table, 1)
+        if gps2 is None and gps2_table and "NSats" in gps2_table and "HDop" in gps2_table:
+            gps2 = (gps2_table["timestamp"], gps2_table["NSats"], gps2_table["HDop"])
+
+        curves = []
+        if gps1 is not None:
+            t, nsats, hdop = gps1
+            curves.append(("GPS1.NSats", t, nsats, "GPS 1: спутники"))
+            curves.append(("GPS1.HDop", t, hdop, "GPS 1: HDOP"))
+        if gps2 is not None:
+            t, nsats, hdop = gps2
+            curves.append(("GPS2.NSats", t, nsats, "GPS 2: спутники"))
+            curves.append(("GPS2.HDop", t, hdop, "GPS 2: HDOP"))
+        if not curves:
+            return
+
+        idx = self.target_graph_combo.currentIndex()
+        graph = self.graphs[idx]
+        for key, t, y, label in curves:
+            if graph.add_curve(key, t, y, label):
+                self._field_graph_assignment[key] = idx
+            else:
+                QMessageBox.warning(
+                    self, "График заполнен",
+                    f"В графике {idx + 1} уже максимум параметров ({MAX_CURVES}). "
+                    f"Удалите один из них или выберите другой график."
+                )
+                break
 
     def _apply_battery_preset(self):
         bat_table = self.log_data.messages.get("BAT")

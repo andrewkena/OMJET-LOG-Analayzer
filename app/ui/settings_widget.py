@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal
 
 from app.core import tile_cache, i18n
+from app.core.paths import get_user_data_dir
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
-_SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "user_settings.json"
+_SETTINGS_FILE = get_user_data_dir() / "user_settings.json"
 
 _ICON_VEHICLE_TYPES = [
     ("VTOL 4+1",        "vtol41_icon.svg"),
@@ -37,7 +38,7 @@ _CACHE_SIZE_OPTIONS = [
 
 class SettingsWidget(QWidget):
     battery_cell_count_changed = Signal(int)
-    battery_hv_changed = Signal(bool)
+    battery_chemistry_changed = Signal(int, str)  # (instance 1|2, chemistry)
     current_thresholds_changed = Signal(float, float)
     speed_thresholds_changed = Signal(float, float, float)
     max_wind_changed = Signal(float)
@@ -47,13 +48,15 @@ class SettingsWidget(QWidget):
     language_changed = Signal(str)
     icon_mapping_changed = Signal(dict)
     cog_thresholds_changed = Signal(float, float, float, float)
+    callout_style_changed = Signal(str)
+    callout_fields_changed = Signal(bool, bool, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._utc_offset = 0.0
         self._language = i18n.get_language()
         self._battery_cells = 8
-        self._battery_hv = False
+        self._bat_chemistry = {1: "lipo", 2: "lipo"}
         self._current_green = 50
         self._current_red = 100
         self._speed_min = 16
@@ -160,6 +163,39 @@ class SettingsWidget(QWidget):
             icon_layout.addRow(lbl, combo)
         layout.addWidget(self.icon_group)
 
+        # ── Map callout ──────────────────────────────────────────────────────────
+        self.callout_group = QGroupBox()
+        callout_layout = QVBoxLayout(self.callout_group)
+
+        style_row = QHBoxLayout()
+        self.callout_style_label = QLabel()
+        style_row.addWidget(self.callout_style_label)
+        self.callout_style_combo = QComboBox()
+        self.callout_style_combo.addItem("", "standard")
+        self.callout_style_combo.addItem("", "shelf")
+        self.callout_style_combo.addItem("", "none")
+        self.callout_style_combo.currentIndexChanged.connect(self._on_callout_changed)
+        style_row.addWidget(self.callout_style_combo)
+        style_row.addStretch()
+        callout_layout.addLayout(style_row)
+
+        fields_row = QHBoxLayout()
+        self.callout_time_cb = QCheckBox()
+        self.callout_time_cb.setChecked(True)
+        self.callout_time_cb.stateChanged.connect(self._on_callout_changed)
+        self.callout_speed_cb = QCheckBox()
+        self.callout_speed_cb.stateChanged.connect(self._on_callout_changed)
+        self.callout_dist_cb = QCheckBox()
+        self.callout_dist_cb.stateChanged.connect(self._on_callout_changed)
+        fields_row.addWidget(self.callout_time_cb)
+        fields_row.addWidget(self.callout_speed_cb)
+        fields_row.addWidget(self.callout_dist_cb)
+        fields_row.addStretch()
+        callout_layout.addLayout(fields_row)
+
+        layout.addWidget(self.callout_group)
+        self._load_callout_settings()
+
         layout = right_layout
 
         # ── Battery ──────────────────────────────────────────────────────────
@@ -175,30 +211,40 @@ class SettingsWidget(QWidget):
         self.cell_count_label = QLabel()
         battery_layout.addRow(self.cell_count_label, self.cell_count_combo)
 
-        self.hv_checkbox = QCheckBox()
-        self.hv_checkbox.stateChanged.connect(self._on_hv_changed)
-        self.battery_type_label = QLabel()
-        battery_layout.addRow(self.battery_type_label, self.hv_checkbox)
+        _chem = [("LiPo (4.20В)", "lipo"), ("LiHV (4.35В)", "lihv"), ("LiUHV (4.40В)", "liuhv")]
+        self.bat1_chem_label = QLabel()
+        self.bat1_chem_combo = QComboBox()
+        for txt, data in _chem:
+            self.bat1_chem_combo.addItem(txt, data)
+        self.bat1_chem_combo.currentIndexChanged.connect(lambda _: self._on_bat_chemistry_changed(1))
+        battery_layout.addRow(self.bat1_chem_label, self.bat1_chem_combo)
 
-        self.threshold_label = QLabel()
-        self._update_threshold_label()
-        self.voltage_range_label = QLabel()
-        battery_layout.addRow(self.voltage_range_label, self.threshold_label)
+        self.bat2_chem_label = QLabel()
+        self.bat2_chem_combo = QComboBox()
+        for txt, data in _chem:
+            self.bat2_chem_combo.addItem(txt, data)
+        self.bat2_chem_combo.currentIndexChanged.connect(lambda _: self._on_bat_chemistry_changed(2))
+        battery_layout.addRow(self.bat2_chem_label, self.bat2_chem_combo)
+
         battery_outer.addLayout(battery_layout)
 
         # Right: voltage info
         info_layout = QVBoxLayout()
-        self.info_lipo_title = QLabel("LiPo / Li-ion:")
+        self.info_lipo_title = QLabel()
         self.info_lipo_full = QLabel()
-        self.info_lipo_min = QLabel()
         self.info_lihv_title = QLabel()
         self.info_lihv_full = QLabel()
-        self.info_lihv_min = QLabel()
-        for lbl in (self.info_lipo_title, self.info_lipo_full, self.info_lipo_min,
-                    self.info_lihv_title, self.info_lihv_full, self.info_lihv_min):
+        self.info_liuhv_title = QLabel()
+        self.info_liuhv_full = QLabel()
+        self.info_volt_min = QLabel()
+        for lbl in (self.info_lipo_title, self.info_lipo_full,
+                    self.info_lihv_title, self.info_lihv_full,
+                    self.info_liuhv_title, self.info_liuhv_full,
+                    self.info_volt_min):
             info_layout.addWidget(lbl)
         info_layout.addStretch()
         battery_outer.addLayout(info_layout)
+        self._load_battery_chemistry()
 
         layout.addWidget(self.battery_group)
 
@@ -377,15 +423,8 @@ class SettingsWidget(QWidget):
 
         self.battery_group.setTitle(tr("Настройка аккумулятора"))
         self.cell_count_label.setText(tr("Количество ячеек:"))
-        self.hv_checkbox.setText(tr("LiHV (повышенное напряжение)"))
-        self.hv_checkbox.setToolTip(tr(
-            "Включить для LiHV аккумуляторов\n"
-            "Стандартный LiPo: 4.20В/ячейку (заряжен) / 3.60В/ячейку (разряжен)\n"
-            "LiHV: 4.35В/ячейку (заряжен) / 3.60В/ячейку (разряжен)"
-        ))
-        self.battery_type_label.setText(tr("Тип аккумулятора:"))
-        self.voltage_range_label.setText(tr("Диапазон напряжения:"))
-        self._update_threshold_label()
+        self.bat1_chem_label.setText(tr("Батарея 1:"))
+        self.bat2_chem_label.setText(tr("Батарея 2:"))
 
         self.color_group.setTitle(tr("Цветовая настройка"))
         self.current_row_label.setText(tr("Сила тока:"))
@@ -406,11 +445,22 @@ class SettingsWidget(QWidget):
         self.cog_front_label.setText(tr("Передняя (красный порог):"))
         self.cog_rear_label.setText(tr("Задняя (красный порог):"))
 
-        self.info_lipo_full.setText(tr("  • Полный заряд: 4.20В/ячейку"))
-        self.info_lipo_min.setText(tr("  • Минимум: 3.60В/ячейку"))
-        self.info_lihv_title.setText(tr("LiHV (повышенное напряжение):"))
-        self.info_lihv_full.setText(tr("  • Полный заряд: 4.35В/ячейку"))
-        self.info_lihv_min.setText(tr("  • Минимум: 3.60В/ячейку"))
+        self.info_lipo_title.setText("LiPo / Li-ion:")
+        self.info_lipo_full.setText(tr("  • Заряжен: 4.20В/ячейку"))
+        self.info_lihv_title.setText("LiHV:")
+        self.info_lihv_full.setText(tr("  • Заряжен: 4.35В/ячейку"))
+        self.info_liuhv_title.setText("LiUHV:")
+        self.info_liuhv_full.setText(tr("  • Заряжен: 4.40В/ячейку"))
+        self.info_volt_min.setText(tr("  • Мин: 3.60В/ячейку (все типы)"))
+
+        self.callout_group.setTitle(tr("Информационная сноска на карте"))
+        self.callout_style_label.setText(tr("Стиль:"))
+        self.callout_style_combo.setItemText(0, tr("Стандарт"))
+        self.callout_style_combo.setItemText(1, tr("На полке"))
+        self.callout_style_combo.setItemText(2, tr("Без данных"))
+        self.callout_time_cb.setText(tr("Время"))
+        self.callout_speed_cb.setText(tr("Скорость"))
+        self.callout_dist_cb.setText(tr("Расстояние"))
 
     @staticmethod
     def _make_dot(color: str) -> QLabel:
@@ -445,23 +495,41 @@ class SettingsWidget(QWidget):
         self._battery_cells = int(text.replace("S", ""))
         self.battery_cell_count_changed.emit(self._battery_cells)
 
-    def _on_hv_changed(self, state: int):
-        self._battery_hv = (state == 2)
-        self.battery_hv_changed.emit(self._battery_hv)
-        self._update_threshold_label()
+    def _on_bat_chemistry_changed(self, instance: int):
+        combo = self.bat1_chem_combo if instance == 1 else self.bat2_chem_combo
+        chemistry = combo.currentData() or "lipo"
+        self._bat_chemistry[instance] = chemistry
+        self.battery_chemistry_changed.emit(instance, chemistry)
+        self._save_battery_chemistry()
 
-    def _update_threshold_label(self):
-        per = i18n.tr("на ячейку")
-        if self._battery_hv:
-            self.threshold_label.setText(
-                f"<span style='color: #3cb44b;'>4.35В</span> / "
-                f"<span style='color: #e6194b;'>3.60В</span> {per}"
-            )
-        else:
-            self.threshold_label.setText(
-                f"<span style='color: #3cb44b;'>4.20В</span> / "
-                f"<span style='color: #e6194b;'>3.60В</span> {per}"
-            )
+    def _save_battery_chemistry(self):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data["bat_chemistry"] = self._bat_chemistry
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _load_battery_chemistry(self):
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            saved = data.get("bat_chemistry", {})
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        for instance, combo in ((1, self.bat1_chem_combo), (2, self.bat2_chem_combo)):
+            chem = saved.get(str(instance), saved.get(instance, "lipo"))
+            idx = combo.findData(chem)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+                self._bat_chemistry[instance] = chem
+
+    def get_battery_chemistry(self, instance: int) -> str:
+        return self._bat_chemistry.get(instance, "lipo")
 
     def _on_current_thresholds_changed(self):
         self._current_green = self.current_green_spin.value()
@@ -486,9 +554,6 @@ class SettingsWidget(QWidget):
 
     def get_battery_cell_count(self) -> int:
         return self._battery_cells
-
-    def is_hv_battery(self) -> bool:
-        return self._battery_hv
 
     def get_current_thresholds(self) -> tuple[float, float]:
         return float(self._current_green), float(self._current_red)
@@ -585,6 +650,60 @@ class SettingsWidget(QWidget):
             return data.get("icon_mapping", {})
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return {}
+
+    def _on_callout_changed(self):
+        style = self.callout_style_combo.currentData() or "standard"
+        self.callout_style_changed.emit(style)
+        self.callout_fields_changed.emit(
+            self.callout_time_cb.isChecked(),
+            self.callout_speed_cb.isChecked(),
+            self.callout_dist_cb.isChecked(),
+        )
+        self._save_callout_settings()
+
+    def _save_callout_settings(self):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data.update({
+                "callout_style": self.callout_style_combo.currentData() or "standard",
+                "callout_time": self.callout_time_cb.isChecked(),
+                "callout_speed": self.callout_speed_cb.isChecked(),
+                "callout_distance": self.callout_dist_cb.isChecked(),
+            })
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _load_callout_settings(self):
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        style = data.get("callout_style", "standard")
+        idx = self.callout_style_combo.findData(style)
+        if idx >= 0:
+            self.callout_style_combo.blockSignals(True)
+            self.callout_style_combo.setCurrentIndex(idx)
+            self.callout_style_combo.blockSignals(False)
+        for cb, key, default in (
+            (self.callout_time_cb, "callout_time", True),
+            (self.callout_speed_cb, "callout_speed", False),
+            (self.callout_dist_cb, "callout_distance", False),
+        ):
+            cb.blockSignals(True)
+            cb.setChecked(data.get(key, default))
+            cb.blockSignals(False)
+
+    def get_callout_settings(self) -> tuple[str, bool, bool, bool]:
+        return (
+            self.callout_style_combo.currentData() or "standard",
+            self.callout_time_cb.isChecked(),
+            self.callout_speed_cb.isChecked(),
+            self.callout_dist_cb.isChecked(),
+        )
 
     def showEvent(self, event):
         super().showEvent(event)

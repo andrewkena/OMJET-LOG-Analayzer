@@ -4,6 +4,7 @@ photo count and per-battery mAh consumed.
 """
 from __future__ import annotations
 
+import math
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel, QPushButton,
@@ -52,6 +53,21 @@ def _haversine_distance_m(lat: np.ndarray, lon: np.ndarray) -> float:
     a = np.sin(dlat / 2.0) ** 2 + np.cos(lat_r[:-1]) * np.cos(lat_r[1:]) * np.sin(dlon / 2.0) ** 2
     seg = 2 * _EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
     return float(np.sum(seg))
+
+
+def _max_range_from_start_m(lat: np.ndarray, lon: np.ndarray) -> float:
+    """Max haversine distance from the first point to any subsequent point."""
+    if len(lat) < 2:
+        return 0.0
+    lat0_r = math.radians(float(lat[0]))
+    lon0_r = math.radians(float(lon[0]))
+    lat_r = np.radians(lat[1:])
+    lon_r = np.radians(lon[1:])
+    dlat = lat_r - lat0_r
+    dlon = lon_r - lon0_r
+    a = np.sin(dlat / 2.0) ** 2 + math.cos(lat0_r) * np.cos(lat_r) * np.sin(dlon / 2.0) ** 2
+    dists = 2 * _EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    return float(np.max(dists))
 
 
 def _running_time_s(t: np.ndarray, pwm: np.ndarray) -> float:
@@ -135,10 +151,12 @@ class MissionAnalysisWidget(QWidget):
         self.vertical_motor_time_label = QLabel("—")
         self.forward_motor_time_label = QLabel("—")
         self.planning_time_label = QLabel("—")
+        self.max_range_label = QLabel("—")
         self.flight_layout.addRow(" ", self.distance_label)
         self.flight_layout.addRow(" ", self.vertical_motor_time_label)
         self.flight_layout.addRow(" ", self.forward_motor_time_label)
         self.flight_layout.addRow(" ", self.planning_time_label)
+        self.flight_layout.addRow(" ", self.max_range_label)
 
         self.wind_group = QGroupBox()
         self.wind_layout = QFormLayout(self.wind_group)
@@ -215,6 +233,12 @@ class MissionAnalysisWidget(QWidget):
 
         self.battery_widget = BatteryWidget()
 
+        self.power_group = QGroupBox()
+        self.power_layout = QFormLayout(self.power_group)
+        self.hover_thrust_label = QLabel("—")
+        self.hover_thrust_row_label = QLabel()
+        self.power_layout.addRow(self.hover_thrust_row_label, self.hover_thrust_label)
+
         self.report_button = QPushButton()
         self.report_button.setEnabled(False)
         self.report_button.clicked.connect(self._open_report_dialog)
@@ -241,6 +265,7 @@ class MissionAnalysisWidget(QWidget):
         right_column.addWidget(self.battery_widget)
         right_column.addWidget(self.efficiency_group)
         right_column.addWidget(self.cog_group)
+        right_column.addWidget(self.power_group)
         right_column.addStretch()
 
         columns_layout.addLayout(left_column)
@@ -266,6 +291,7 @@ class MissionAnalysisWidget(QWidget):
         self.flight_layout.labelForField(self.vertical_motor_time_label).setText(tr("Время работы вертикальных моторов:"))
         self.flight_layout.labelForField(self.forward_motor_time_label).setText(tr("Время работы ходового мотора:"))
         self.flight_layout.labelForField(self.planning_time_label).setText(tr("Время планирования (без моторов):"))
+        self.flight_layout.labelForField(self.max_range_label).setText(tr("Максимальное удаление от точки старта:"))
 
         self.wind_group.setTitle(tr("Ветер"))
         self.wind_layout.labelForField(self.avg_wind_label).setText(tr("Средний ветер:"))
@@ -303,6 +329,9 @@ class MissionAnalysisWidget(QWidget):
         self.cog_group.setTitle(tr("Расчётная центровка"))
         self.cog_layout.labelForField(self.cog_overall_label.parent()).setText(tr("Центровка за весь полёт:"))
         self.cog_layout.labelForField(self.cog_fwd_label.parent()).setText(tr("Центровка в горизонтальном полёте:"))
+
+        self.power_group.setTitle(tr("Энерговооружённость"))
+        self.hover_thrust_row_label.setText(tr("Вертикальная тяга (Q_HOVER_TRUST):"))
 
         self.efficiency_group.setTitle(tr("Эффективность"))
         self.efficiency_layout.labelForField(self.overall_mah_per_km_label.parent()).setText(tr("Общий расход на километр:"))
@@ -372,9 +401,19 @@ class MissionAnalysisWidget(QWidget):
         self.mission_date_label.setText(format_gps_date(start_t))
         self.start_label.setText(format_gps_time(start_t))
         self.end_label.setText(format_gps_time(end_t))
-        self.duration_label.setText(format_mmss(end_t - start_t))
+        _dur_s = max(0.0, end_t - start_t)
+        _total_m = int(_dur_s) // 60
+        _h, _m = divmod(_total_m, 60)
+        _hm = f"{_h} ч {_m:02d} мин" if _h > 0 else f"{_m} мин"
+        self.duration_label.setText(f"{format_mmss(_dur_s)} ({_hm})")
 
         self.distance_label.setText(f"{self._distance_m(log_data):.0f} м")
+
+        max_range = self._max_range_m(log_data)
+        if max_range >= 1000:
+            self.max_range_label.setText(f"{max_range / 1000:.2f} км")
+        else:
+            self.max_range_label.setText(f"{max_range:.0f} м")
 
         vert_t, fwd_t = self._motor_times(log_data)
         duration = max(end_t - start_t, 0.0)
@@ -462,6 +501,13 @@ class MissionAnalysisWidget(QWidget):
                     self._cog_fwd_value = float(np.mean(pidp_i[fwd_mask]))
         self._update_cog_display()
 
+        param_map = {p["name"]: p["value"] for p in log_data.parameters()}
+        q_hover = param_map.get("Q_HOVER_TRUST")
+        if q_hover is not None:
+            self.hover_thrust_label.setText(f"{float(q_hover):.3f}")
+        else:
+            self.hover_thrust_label.setText("—")
+
         vert_motors = self._vertical_motor_series(log_data) or None
         fwd_motor = self._forward_motor_series(log_data)
         self.battery_widget.load(log_data, vert_motors=vert_motors, fwd_motor=fwd_motor)
@@ -541,6 +587,18 @@ class MissionAnalysisWidget(QWidget):
                     return _haversine_distance_m(lat, lon)
                 motor_t, motor_pwm = motor
                 return _distance_while_running_m(lat, lon, table["timestamp"], motor_t, motor_pwm)
+        return 0.0
+
+    def _max_range_m(self, log_data: LogData) -> float:
+        for msg_type, lat_f, lon_f in _GPS_LAT_CANDIDATES:
+            table = log_data.messages.get(msg_type)
+            if table and lat_f in table and lon_f in table:
+                lat = table[lat_f]
+                lon = table[lon_f]
+                if msg_type == "GLOBAL_POSITION_INT":
+                    lat = lat / 1e7
+                    lon = lon / 1e7
+                return _max_range_from_start_m(lat, lon)
         return 0.0
 
     def _channel_for_function(self, log_data: LogData) -> dict[str, int]:
@@ -911,6 +969,7 @@ class MissionAnalysisWidget(QWidget):
             "vertical_motor_time": self.vertical_motor_time_label.text(),
             "forward_motor_time": self.forward_motor_time_label.text(),
             "planning_time": self.planning_time_label.text(),
+            "max_range": self.max_range_label.text(),
             "avg_wind": self.avg_wind_label.text(),
             "max_wind": self.max_wind_label.text(),
             "wind_dir": self.wind_dir_label.text(),

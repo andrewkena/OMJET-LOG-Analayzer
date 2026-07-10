@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QEvent
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 from app.ui.time_axis import TimeAxisItem
@@ -45,6 +45,7 @@ class GraphWidget(QWidget):
         self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("w", width=1))
         self.plot_widget.addItem(self.vline, ignoreBounds=True)
         self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self.plot_widget.viewport().installEventFilter(self)
 
         self.selection_region = pg.LinearRegionItem(
             brush=pg.mkBrush(255, 255, 0, 30), movable=False
@@ -52,6 +53,33 @@ class GraphWidget(QWidget):
         self.selection_region.setZValue(-10)
         self.plot_widget.addItem(self.selection_region, ignoreBounds=True)
         self.selection_region.hide()
+
+    def eventFilter(self, obj, event):
+        if obj is self.plot_widget.viewport() and event.type() == QEvent.Type.Wheel:
+            delta = event.angleDelta().y()
+            if delta == 0:
+                return False
+            factor = 0.85 if delta > 0 else 1.0 / 0.85
+
+            vb = self.plot_widget.plotItem.vb
+            try:
+                vp_pos = event.position().toPoint()
+            except AttributeError:
+                vp_pos = event.pos()
+            scene_pos = self.plot_widget.mapToScene(vp_pos)
+            scene_rect = vb.sceneBoundingRect()
+
+            if scene_pos.x() < scene_rect.left():
+                # Mouse is over the Y (left) axis — zoom Y only
+                data_pt = vb.mapSceneToView(scene_pos)
+                vb.scaleBy((1.0, factor), pg.Point(data_pt.x(), data_pt.y()))
+                return True
+            if scene_pos.y() > scene_rect.bottom():
+                # Mouse is over the X (bottom) axis — zoom X only
+                data_pt = vb.mapSceneToView(pg.Point(scene_pos.x(), scene_rect.center().y()))
+                vb.scaleBy((factor, 1.0), pg.Point(data_pt.x(), data_pt.y()))
+                return True
+        return False
 
     def set_time_origin(self, t0: float):
         self.time_axis.set_origin(t0)

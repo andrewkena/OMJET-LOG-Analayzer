@@ -37,7 +37,7 @@ def register_cache_cleared_callback(callback: Callable[[], None]) -> None:
 
 
 def get_app_dir() -> Path:
-    """Writable base directory: next to the .exe when frozen (PyInstaller), else the project root."""
+    """Install directory (read-only assets).  Kept for backward compatibility."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent.parent
@@ -45,7 +45,8 @@ def get_app_dir() -> Path:
 
 # Computed once at import time on the main thread — requestStarted runs on Qt IO thread
 # where calling Path.resolve() / ntpath.realpath causes heap corruption on Windows.
-_CACHE_DIR: Path = get_app_dir() / "map_cache"
+from app.core.paths import get_user_data_dir as _get_user_data_dir  # noqa: E402
+_CACHE_DIR: Path = _get_user_data_dir() / "map_cache"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 

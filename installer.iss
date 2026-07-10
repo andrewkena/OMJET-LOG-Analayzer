@@ -1,5 +1,5 @@
 #define MyAppName "OMJET LOG Analyzer"
-#define MyAppVersion "0.7"
+#define MyAppVersion "0.71"
 #define MyAppExeName "OMJET_Log_Analyzer.exe"
 
 [Setup]

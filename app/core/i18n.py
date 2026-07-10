@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "user_settings.json"
+from app.core.paths import get_user_data_dir
+_SETTINGS_FILE = get_user_data_dir() / "user_settings.json"
 
 _lang = "ru"
 _callbacks: list = []

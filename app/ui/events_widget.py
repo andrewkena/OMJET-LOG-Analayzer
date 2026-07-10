@@ -23,7 +23,7 @@ _SEVERITY_COLORS = {
 }
 
 _RESOLVED_WORDS = ("off", "cleared", "resolved", "restored")
-_CRITICAL_MSG_WORDS = ("crash", "abort", "emergency", "lost link", "fatal", "parachute")
+_CRITICAL_MSG_WORDS = ("crash", "abort", "emergency", "lost link", "fatal", "parachute", "angle assist", "alt assist")
 _WARNING_MSG_WORDS = ("fail", "bad ", "unhealthy", "low batt", "warn", "ekf", "prearm", "glitch")
 
 # Substring -> Russian translation for common ArduPilot STATUSTEXT (MSG) prefixes.
@@ -44,6 +44,8 @@ _MSG_TRANSLATIONS = [
     ("rc failsafe", "Отказоустойчивость по радиосвязи (RC failsafe)"),
     ("battery failsafe", "Отказоустойчивость по батарее"),
     ("failsafe", "Отказоустойчивость (failsafe):"),
+    ("angle assist", "Вмешательство по углу (Angle Assist):"),
+    ("alt assist", "Вмешательство по высоте (Alt Assist):"),
     ("crash detected", "Обнаружена авария (crash)"),
     ("init ardu", "Инициализация прошивки:"),
     ("frame:", "Тип рамы:"),
@@ -99,11 +101,12 @@ def _severity(row: dict, decoded: str) -> str:
             ecode = 1
         return "info" if ecode == 0 else "critical"
     if msg_type == "MSG":
-        if "failsafe" in decoded_lower or "fail safe" in decoded_lower:
-            return "info" if any(w in decoded_lower for w in _RESOLVED_WORDS) else "critical"
-        if any(w in decoded_lower for w in _CRITICAL_MSG_WORDS):
+        msg_raw = str(row.get("Message", "")).lower()
+        if "failsafe" in msg_raw or "fail safe" in msg_raw:
+            return "info" if any(w in msg_raw for w in _RESOLVED_WORDS) else "critical"
+        if any(w in msg_raw for w in _CRITICAL_MSG_WORDS):
             return "critical"
-        if any(w in decoded_lower for w in _WARNING_MSG_WORDS):
+        if any(w in msg_raw for w in _WARNING_MSG_WORDS):
             return "warning"
         return "info"
     return "info"

@@ -8,10 +8,11 @@ from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import QApplication
 
 from app.core import i18n
+from app.core.paths import get_user_data_dir
 from app.core.tile_scheme_handler import SCHEME, TileCacheSchemeHandler, register_tile_scheme
 from app.ui.main_window import MainWindow
 
-_LOG = Path(__file__).resolve().parent / "crash.log"
+_LOG = get_user_data_dir() / "crash.log"
 
 
 def _excepthook(exc_type, exc_value, exc_tb):
@@ -24,7 +25,10 @@ def _excepthook(exc_type, exc_value, exc_tb):
 
 
 def main():
-    faulthandler.enable(file=open(_LOG, "w", encoding="utf-8"), all_threads=True)
+    try:
+        faulthandler.enable(file=open(_LOG, "w", encoding="utf-8"), all_threads=True)
+    except OSError:
+        pass  # non-critical: faulthandler output is a bonus, not required
     sys.excepthook = _excepthook
 
     i18n.load()

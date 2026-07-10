@@ -5,66 +5,65 @@ from __future__ import annotations
 # ArduPilot's common LogEvent enum (AP_Logger/LogStructure.h) - stable across
 # Copter/Plane/Rover firmware versions.
 EVENT_ID_NAMES: dict[int, str] = {
+    # Pre-enum legacy events
     7: "Состояние автопилота",
     8: "Установлено системное время",
     9: "Инициализация курса (simple bearing)",
-    10: "Armed (моторы взведены)",
-    11: "Disarmed (моторы разоружены)",
-    15: "Auto-armed",
-    16: "Начало взлёта",
-    17: "Взлёт завершён",
-    18: "Начало посадки",
-    19: "Посадка завершена",
-    20: "Потеря GPS",
-    21: "Начало флипа",
-    22: "Окончание флипа",
-    23: "Установлен Home",
-    24: "Simple mode включен",
-    25: "Simple mode выключен",
-    26: "Super Simple mode включен",
-    27: "Super Simple mode выключен",
-    28: "Возможное завершение посадки",
-    29: "Посадка не подтверждена",
-    30: "Autotune: инициализация",
-    31: "Autotune: выключен",
-    32: "Autotune: перезапуск",
-    33: "Autotune: успешно завершен",
-    34: "Autotune: ошибка",
-    35: "Autotune: достигнут предел",
-    36: "Autotune: тест пилотом",
-    37: "Autotune: коэффициенты сохранены",
-    38: "Сохранение триммера",
-    39: "Сохранение точки маршрута",
-    41: "Fence включен",
-    42: "Fence выключен",
-    43: "Acro trainer выключен",
-    44: "Acro trainer: выравнивание",
-    45: "Acro trainer: ограничение",
-    46: "Захват грузом (gripper)",
-    47: "Отпускание груза (gripper)",
-    49: "Парашют выключен",
-    50: "Парашют включен",
-    51: "Парашют выпущен",
-    52: "Шасси выпущено",
-    53: "Шасси убрано",
-    54: "Аварийная остановка моторов",
-    55: "Аварийная остановка моторов снята",
-    56: "Блокировка моторов (interlock) включена",
-    57: "Блокировка моторов (interlock) выключена",
-    58: "Разгон ротора завершен",
-    59: "Скорость ротора ниже критической",
-    60: "Сброс высоты EKF",
-    61: "Посадка отменена пилотом",
-    62: "Сброс курса EKF (yaw reset)",
-    63: "ADSB избегание включено",
-    64: "ADSB избегание выключено",
-    65: "Избегание препятствий включено",
-    66: "Избегание препятствий выключено",
-    67: "Смена основного GPS",
+    # ArduPilot LogEvent enum (AP_Logger/LogStructure.h)
+    10: "Взведение моторов (Armed)",            # ARMED
+    11: "Разоружение моторов (Disarmed)",        # DISARMED
+    15: "Автовзведение (Auto Armed)",            # AUTO_ARMED
+    17: "Возможное завершение посадки",          # LAND_COMPLETE_MAYBE
+    18: "Посадка завершена",                     # LAND_COMPLETE
+    19: "Потеря GPS",                            # LOST_GPS
+    21: "Начало флипа",                          # FLIP_START
+    22: "Окончание флипа",                       # FLIP_END
+    25: "Установлен Home",                       # SET_HOME
+    26: "Simple mode включён",                   # SET_SIMPLE_ON
+    27: "Simple mode выключен",                  # SET_SIMPLE_OFF
+    28: "Посадка не подтверждена",               # NOT_LANDED
+    29: "Super Simple mode включён",             # SET_SUPERSIMPLE_ON
+    30: "Autotune: инициализация",               # AUTOTUNE_INITIALISED
+    31: "Autotune: выключен",                    # AUTOTUNE_OFF
+    32: "Autotune: перезапуск",                  # AUTOTUNE_RESTART
+    33: "Autotune: успешно завершён",            # AUTOTUNE_SUCCESS
+    34: "Autotune: ошибка",                      # AUTOTUNE_FAILED
+    35: "Autotune: достигнут предел",            # AUTOTUNE_REACHED_LIMIT
+    36: "Autotune: тест пилотом",                # AUTOTUNE_PILOT_TESTING
+    37: "Autotune: коэффициенты сохранены",      # AUTOTUNE_SAVEDGAINS
+    38: "Сохранение триммера",                   # SAVE_TRIM
+    39: "Сохранение точки маршрута",             # SAVEWP_ADD_WP
+    41: "Fence включён",                         # FENCE_ENABLE
+    42: "Fence выключен",                        # FENCE_DISABLE
+    43: "Acro trainer выключен",                 # ACRO_TRAINER_OFF
+    44: "Acro trainer: выравнивание",            # ACRO_TRAINER_LEVELING
+    45: "Acro trainer: ограничение угла",        # ACRO_TRAINER_LIMITED
+    46: "Захват груза (gripper)",                # GRIPPER_GRAB
+    47: "Отпускание груза (gripper)",            # GRIPPER_RELEASE
+    49: "Парашют выключен",                      # PARACHUTE_DISABLED
+    50: "Парашют включён",                       # PARACHUTE_ENABLED
+    51: "Парашют выпущен",                       # PARACHUTE_RELEASED
+    52: "Шасси выпущено",                        # LANDING_GEAR_DEPLOYED
+    53: "Шасси убрано",                          # LANDING_GEAR_RETRACTED
+    54: "Аварийная остановка моторов",           # MOTORS_EMERGENCY_STOPPED
+    55: "Аварийная остановка моторов снята",     # MOTORS_EMERGENCY_STOP_CLEARED
+    56: "Блокировка моторов (interlock) выкл.",  # MOTORS_INTERLOCK_DISABLED
+    57: "Блокировка моторов (interlock) вкл.",   # MOTORS_INTERLOCK_ENABLED
+    58: "Разгон ротора завершён",                # ROTOR_RUNUP_COMPLETE
+    59: "Скорость ротора ниже критической",      # ROTOR_SPEED_BELOW_CRITICAL
+    60: "Сброс высоты EKF",                      # EKF_ALT_RESET
+    61: "Посадка отменена пилотом",              # LAND_CANCELLED_BY_PILOT
+    62: "Сброс курса EKF (Yaw Reset)",           # EKF_YAW_RESET
+    63: "ADSB: избегание включено",              # AVOIDANCE_ADSB_ENABLE
+    64: "ADSB: избегание выключено",             # AVOIDANCE_ADSB_DISABLE
+    65: "Избегание препятствий включено",        # AVOIDANCE_PROXIMITY_ENABLE
+    66: "Избегание препятствий выключено",       # AVOIDANCE_PROXIMITY_DISABLE
+    67: "Смена основного GPS",                   # GPS_PRIMARY_CHANGED
+    # Extended events (newer firmware)
     68: "Zigzag: точка A сохранена",
     69: "Zigzag: точка B сохранена",
     70: "Zigzag: автоматический режим",
-    71: "Wheelsteer: газ включен",
+    71: "Wheelsteer: газ включён",
     72: "Wheelsteer: газ выключен",
 }
 

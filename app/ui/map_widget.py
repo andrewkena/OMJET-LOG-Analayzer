@@ -12,7 +12,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QPushButton
 
 from app.core import i18n
 from app.core.time_format import format_mmss
@@ -43,8 +43,12 @@ _HTML = """<!DOCTYPE html>
 html,body,#map{height:100%;margin:0;padding:0;background:#222;}
 .time-tooltip{background:#e6194b;color:#fff;border:none;font-weight:bold;font-size:12px;}
 .time-tooltip::before{border-top-color:#e6194b;}
+.time-tooltip-shelf{background:#e6194b;color:#fff;border:none;font-weight:bold;font-size:12px;}
+.time-tooltip-shelf.leaflet-tooltip-right::before{border:none;width:36px;height:2px;background:#e6194b;left:-36px;top:50%;margin-top:-1px;margin-left:0;}
 .vtol-icon{pointer-events:none;}
 .vtol-icon svg{transform-origin:50% 50%;transition:transform 0.05s linear;}
+.msr-tip{background:rgba(255,140,0,0.92);color:#fff;border:none;font-size:11px;font-weight:bold;padding:2px 6px;border-radius:3px;white-space:nowrap;}
+.msr-tip::before{border-top-color:rgba(255,140,0,0.92);}
 </style>
 </head>
 <body>
@@ -200,6 +204,30 @@ function _buildCurrentIcon(scale) {
 var vtolIcon = _buildCurrentIcon(iconScale);
 var marker = L.marker([0, 0], {icon: vtolIcon, draggable: true}).addTo(map);
 marker.bindTooltip('00:00', {permanent: true, direction: 'top', offset: [0, -10], className: 'time-tooltip'});
+// ── Callout / info-box state ──────────────────────────────────────────────
+var _calloutStyle = 'standard';
+var _calloutFields = {time: true, speed: false, distance: false};
+var _calloutSpeed = null, _calloutAirspeed = null, _calloutDist = null, _calloutTime = '00:00';
+function _calloutHtml() {
+    var parts = [];
+    if (_calloutFields.time && _calloutTime) parts.push(_calloutTime);
+    if (_calloutFields.speed) {
+        if (_calloutSpeed !== null && _calloutAirspeed !== null) {
+            parts.push('Земля: ' + _calloutSpeed + ' м/с');
+            parts.push('Возд: ' + _calloutAirspeed + ' м/с');
+        } else if (_calloutSpeed !== null) {
+            parts.push(_calloutSpeed + ' м/с');
+        } else if (_calloutAirspeed !== null) {
+            parts.push('Возд: ' + _calloutAirspeed + ' м/с');
+        }
+    }
+    if (_calloutFields.distance && _calloutDist !== null) parts.push(_calloutDist);
+    return parts.join('<br>') || '&nbsp;';
+}
+function _rebindTooltip(direction, offset, cls) {
+    if (marker.getTooltip()) marker.unbindTooltip();
+    marker.bindTooltip(_calloutHtml(), {permanent: true, direction: direction, offset: offset, className: cls || 'time-tooltip'});
+}
 function setIconScale(scale) {
     iconScale = scale;
     vtolIcon = _buildCurrentIcon(iconScale);
@@ -232,6 +260,23 @@ function notifyCursorDragged(timeVal) {
 
 var trackCoords = [];
 var trackTimes = [];
+var _lastTrackNotifiedTime = null;
+
+trackLine.on('mousemove', function(e) {
+    if (trackCoords.length === 0 || trackTimes.length === 0) return;
+    var pos = e.latlng;
+    var minDist = Infinity;
+    var bestIdx = 0;
+    for (var i = 0; i < trackCoords.length; i++) {
+        var d = Math.pow(pos.lat - trackCoords[i][0], 2) + Math.pow(pos.lng - trackCoords[i][1], 2);
+        if (d < minDist) { minDist = d; bestIdx = i; }
+    }
+    var t = trackTimes[bestIdx];
+    if (_lastTrackNotifiedTime === null || Math.abs(t - _lastTrackNotifiedTime) > 0.5) {
+        _lastTrackNotifiedTime = t;
+        notifyCursorDragged(t);
+    }
+});
 
 function setTrackWithTimes(coords, times) {
     trackCoords = coords;
@@ -294,10 +339,14 @@ function setTrack(coords) {
         map.fitBounds(trackLine.getBounds(), {padding: [20, 20]});
     }
 }
-function setCursor(lat, lon, timeLabel, heading) {
+function setCursor(lat, lon, timeLabel, heading, speed, distance, airspeed) {
+    if (timeLabel !== undefined && timeLabel !== null) _calloutTime = timeLabel;
+    if (speed !== undefined && speed !== null) _calloutSpeed = speed;
+    if (distance !== undefined && distance !== null) _calloutDist = distance;
+    _calloutAirspeed = (airspeed !== undefined) ? airspeed : null;
     marker.setLatLng([lat, lon]);
-    if (timeLabel !== undefined) {
-        marker.setTooltipContent(timeLabel);
+    if (marker.getTooltip()) {
+        marker.setTooltipContent(_calloutHtml());
     }
     if (heading !== undefined) {
         lastHeading = heading;
@@ -404,6 +453,119 @@ function setMission(coords) {
         map.fitBounds(missionLine.getBounds(), {padding: [30, 30]});
     }
 }
+
+// ── Distance measurement tool ─────────────────────────────────────────────
+var measureMode = false;
+var measurePoints = [];
+var measureLayer = L.layerGroup().addTo(map);
+var measureLine = L.polyline([], {color:'#ffcc00', weight:2, dashArray:'5,4', opacity:0.9}).addTo(map);
+var measureClickPending = null;
+
+function _haversineM(lat1,lon1,lat2,lon2){
+    var R=6371000, dLat=(lat2-lat1)*Math.PI/180, dLon=(lon2-lon1)*Math.PI/180;
+    var a=Math.sin(dLat/2)*Math.sin(dLat/2)+
+          Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*
+          Math.sin(dLon/2)*Math.sin(dLon/2);
+    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function _fmtDist(m){
+    return m>=1000?(m/1000).toFixed(2)+' км':Math.round(m)+' м';
+}
+function _measureTotal(){
+    var d=0;
+    for(var i=1;i<measurePoints.length;i++)
+        d+=_haversineM(measurePoints[i-1].lat,measurePoints[i-1].lng,
+                       measurePoints[i].lat,measurePoints[i].lng);
+    return d;
+}
+function _redrawMeasure(){
+    measureLayer.clearLayers();
+    measureLine.setLatLngs(measurePoints);
+    if(!measurePoints.length) return;
+    var cum=0;
+    measurePoints.forEach(function(pt,i){
+        if(i>0) cum+=_haversineM(measurePoints[i-1].lat,measurePoints[i-1].lng,pt.lat,pt.lng);
+        var txt = i===0 ? '▶ Старт' : _fmtDist(cum);
+        L.circleMarker(pt,{radius:5,color:'#ffcc00',fillColor:'#ff6600',fillOpacity:1,weight:2})
+         .bindTooltip(txt,{permanent:true,direction:'top',offset:[0,-8],className:'msr-tip'})
+         .addTo(measureLayer);
+        // segment midpoint label
+        if(i>0){
+            var mLat=(measurePoints[i-1].lat+pt.lat)/2;
+            var mLon=(measurePoints[i-1].lng+pt.lng)/2;
+            var seg=_haversineM(measurePoints[i-1].lat,measurePoints[i-1].lng,pt.lat,pt.lng);
+            L.marker([mLat,mLon],{icon:L.divIcon({
+                className:'',
+                html:'<div style="background:rgba(0,0,0,0.7);color:#fff;padding:1px 5px;'+
+                     'border-radius:3px;font-size:11px;white-space:nowrap;">'+_fmtDist(seg)+'</div>',
+                iconSize:null,iconAnchor:[0,8]
+            }),interactive:false}).addTo(measureLayer);
+        }
+    });
+}
+function setMeasureMode(active){
+    measureMode=active;
+    measurePoints=[];
+    measureLayer.clearLayers();
+    measureLine.setLatLngs([]);
+    if(measureClickPending){clearTimeout(measureClickPending);measureClickPending=null;}
+    if(active){
+        map.doubleClickZoom.disable();
+        map.getContainer().style.cursor='crosshair';
+    } else {
+        map.doubleClickZoom.enable();
+        map.getContainer().style.cursor='';
+    }
+}
+map.on('click',function(e){
+    if(!measureMode) return;
+    if(measureClickPending) return; // swallow click that is part of dblclick
+    measureClickPending=setTimeout(function(){
+        measureClickPending=null;
+        measurePoints.push(e.latlng);
+        _redrawMeasure();
+    },230);
+});
+map.on('dblclick',function(e){
+    if(!measureMode) return;
+    L.DomEvent.stop(e);
+    if(measureClickPending){clearTimeout(measureClickPending);measureClickPending=null;}
+    if(measurePoints.length>1){
+        var total=_measureTotal();
+        L.popup({offset:[0,-6],className:'msr-popup'})
+         .setLatLng(e.latlng)
+         .setContent('<b>Итого: '+_fmtDist(total)+'</b><br><small style="color:#888">Клик — продолжить &nbsp;|&nbsp; ПКМ — сбросить</small>')
+         .openOn(map);
+    }
+    // reset points but stay in measure mode so user can measure again
+    measurePoints=[];
+    measureLayer.clearLayers();
+    measureLine.setLatLngs([]);
+});
+map.on('contextmenu',function(e){
+    if(!measureMode) return;
+    L.DomEvent.stop(e);
+    measurePoints=[];
+    measureLayer.clearLayers();
+    measureLine.setLatLngs([]);
+    map.closePopup();
+});
+function setCalloutStyle(style) {
+    _calloutStyle = style;
+    if (style === 'standard') {
+        _rebindTooltip('top', [0, -10]);
+    } else if (style === 'shelf') {
+        _rebindTooltip('right', [42, 0], 'time-tooltip-shelf');
+    } else {
+        if (marker.getTooltip()) marker.unbindTooltip();
+    }
+}
+function setCalloutFields(showTime, showSpeed, showDist) {
+    _calloutFields = {time: showTime, speed: showSpeed, distance: showDist};
+    if (marker.getTooltip()) {
+        marker.setTooltipContent(_calloutHtml());
+    }
+}
 </script>
 </body></html>
 """
@@ -471,6 +633,12 @@ class MapWidget(QWidget):
         self.show_wind_checkbox = QCheckBox()
         self.show_wind_checkbox.setChecked(True)
         self.show_wind_checkbox.toggled.connect(self.set_wind_panel_visible)
+
+        self.measure_btn = QPushButton("📏")
+        self.measure_btn.setCheckable(True)
+        self.measure_btn.setFixedWidth(36)
+        self.measure_btn.setFixedHeight(24)
+        self.measure_btn.toggled.connect(self._on_measure_toggled)
 
         self._max_wind = 12.0
 
@@ -549,6 +717,11 @@ class MapWidget(QWidget):
         self._mode_colors: dict[str, str] = {}
         self._wind_t = np.array([])
         self._wind_speed = np.array([])
+        self._gnd_speed_t = np.array([])
+        self._gnd_speed_v = np.array([])
+        self._airspeed_t = np.array([])
+        self._airspeed_v = np.array([])
+        self._cum_dist = np.array([])
 
         self._position_error_legend()
         self._position_wind_panel()
@@ -643,6 +816,16 @@ class MapWidget(QWidget):
 
     def set_track(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):
         self._t, self._lat, self._lon = t, lat, lon
+        if len(lat) >= 2:
+            lat_r = np.radians(lat)
+            lon_r = np.radians(lon)
+            dlat = np.diff(lat_r)
+            dlon = np.diff(lon_r)
+            a = np.sin(dlat / 2) ** 2 + np.cos(lat_r[:-1]) * np.cos(lat_r[1:]) * np.sin(dlon / 2) ** 2
+            segs = 2 * 6371000.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+            self._cum_dist = np.concatenate([[0.0], np.cumsum(segs)])
+        else:
+            self._cum_dist = np.zeros(len(lat))
         # Subsample to ≤6000 points for JS; full arrays kept for Python interpolation.
         # The subsampled arrays are also reused for mode-segment and wind-highlight
         # JS calls so those never exceed the same size limit.
@@ -804,6 +987,29 @@ class MapWidget(QWidget):
     def clear_heading_data(self):
         self._heading_t = np.array([])
 
+    def set_map_speed_data(self, t: np.ndarray, speed: np.ndarray):
+        self._gnd_speed_t, self._gnd_speed_v = t, speed
+
+    def clear_map_speed_data(self):
+        self._gnd_speed_t = np.array([])
+        self._gnd_speed_v = np.array([])
+
+    def set_map_airspeed_data(self, t: np.ndarray, speed: np.ndarray):
+        self._airspeed_t, self._airspeed_v = t, speed
+
+    def clear_map_airspeed_data(self):
+        self._airspeed_t = np.array([])
+        self._airspeed_v = np.array([])
+
+    def set_callout_style(self, style: str):
+        self._run_js(f"setCalloutStyle('{style}');")
+
+    def set_callout_fields(self, show_time: bool, show_speed: bool, show_dist: bool):
+        t = 'true' if show_time else 'false'
+        s = 'true' if show_speed else 'false'
+        d = 'true' if show_dist else 'false'
+        self._run_js(f"setCalloutFields({t},{s},{d});")
+
     def set_cursor_time(self, t: float):
         if len(self._t) == 0:
             return
@@ -816,7 +1022,28 @@ class MapWidget(QWidget):
             hidx = max(0, min(hidx, len(self._heading_t) - 1))
             heading = float(self._heading_v[hidx])
         heading_arg = f"{heading}" if heading is not None else "undefined"
-        self._run_js(f"setCursor({self._lat[idx]}, {self._lon[idx]}, '{label}', {heading_arg});")
+
+        speed_arg = "null"
+        if len(self._gnd_speed_t):
+            sidx = int(np.searchsorted(self._gnd_speed_t, t))
+            sidx = max(0, min(sidx, len(self._gnd_speed_t) - 1))
+            speed_arg = f'"{float(self._gnd_speed_v[sidx]):.1f}"'
+
+        airspeed_arg = "null"
+        if len(self._airspeed_t):
+            aidx = int(np.searchsorted(self._airspeed_t, t))
+            aidx = max(0, min(aidx, len(self._airspeed_t) - 1))
+            airspeed_arg = f'"{float(self._airspeed_v[aidx]):.1f}"'
+
+        dist_arg = "null"
+        if len(self._cum_dist) > idx:
+            d_m = float(self._cum_dist[idx])
+            dist_arg = f'"{d_m / 1000:.2f} км"' if d_m >= 1000 else f'"{d_m:.0f} м"'
+
+        self._run_js(
+            f"setCursor({self._lat[idx]}, {self._lon[idx]}, '{label}', "
+            f"{heading_arg}, {speed_arg}, {dist_arg}, {airspeed_arg});"
+        )
 
     def highlight_range(self, t0: float, t1: float):
         if len(self._t) == 0:
@@ -906,6 +1133,9 @@ class MapWidget(QWidget):
 
     def set_follow(self, enabled: bool):
         self._run_js(f"setFollow({'true' if enabled else 'false'});")
+
+    def _on_measure_toggled(self, checked: bool):
+        self._run_js(f"setMeasureMode({'true' if checked else 'false'});")
 
     def _on_map_cursor_dragged(self, time_val: float):
         """Called when user drags the marker on the map."""

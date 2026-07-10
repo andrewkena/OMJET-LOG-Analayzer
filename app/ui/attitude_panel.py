@@ -92,6 +92,7 @@ class AttitudeIndicator(QWidget):
         radius = side / 2
         px_per_degree = radius / 45.0
 
+        # ── Rotating sky / ground background ──────────────────────────────
         painter.save()
         clip = QPainterPath()
         clip.addEllipse(QPointF(cx, cy), radius, radius)
@@ -104,63 +105,85 @@ class AttitudeIndicator(QWidget):
 
         big = radius * 3
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#2266cc"))
+        painter.setBrush(QColor("#1e6eb5"))          # sky blue
         painter.drawRect(QRectF(-big, -big, big * 2, big))
-        painter.setBrush(QColor("#8b5a2b"))
+        painter.setBrush(QColor("#7a4a1e"))          # earth brown
         painter.drawRect(QRectF(-big, 0, big * 2, big))
         painter.setPen(QPen(QColor("white"), 2))
         painter.drawLine(QPointF(-big, 0), QPointF(big, 0))
 
-        # Pitch ladder: short tick lines + labels every 10 degrees, above and below horizon.
+        # Pitch ladder: minor ticks at 5°, major ticks + labels at 10/20/30°
         font = QFont(painter.font())
         font.setPointSize(7)
         painter.setFont(font)
-        painter.setPen(QPen(QColor("white"), 1.5))
-        gap = 6
-        for deg in _PITCH_LADDER_DEGREES:
-            half_len = 16 - (deg // 10 - 1) * 3
+        gap = 8
+        for deg in (5, 10, 20, 30):
+            major = (deg % 10 == 0)
+            half_len = 18 if major else 8
             for sign in (-1, 1):
                 y = -sign * deg * px_per_degree
+                painter.setPen(QPen(QColor("white"), 1.5))
                 painter.drawLine(QPointF(-gap - half_len, y), QPointF(-gap, y))
                 painter.drawLine(QPointF(gap, y), QPointF(gap + half_len, y))
-                painter.drawText(QRectF(-gap - half_len - 20, y - 7, 18, 14),
-                                  Qt.AlignRight | Qt.AlignVCenter, str(deg))
-                painter.drawText(QRectF(gap + half_len + 2, y - 7, 18, 14),
-                                  Qt.AlignLeft | Qt.AlignVCenter, str(deg))
+                if major:
+                    painter.drawText(QRectF(-gap - half_len - 22, y - 7, 20, 14),
+                                     Qt.AlignRight | Qt.AlignVCenter, str(deg))
+                    painter.drawText(QRectF(gap + half_len + 2, y - 7, 20, 14),
+                                     Qt.AlignLeft | Qt.AlignVCenter, str(deg))
 
-        painter.restore()
-
-        # Fixed aircraft symbol (yellow wings + center dot).
-        painter.setPen(QPen(QColor("#ffd000"), 3))
-        painter.drawLine(QPointF(cx - radius * 0.45, cy), QPointF(cx - radius * 0.15, cy))
-        painter.drawLine(QPointF(cx + radius * 0.15, cy), QPointF(cx + radius * 0.45, cy))
+        # Bank-angle pointer: undo pitch so it stays fixed at the rim
+        painter.translate(0, -pitch_offset)
+        ptr_r = radius - 3
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#ffd000"))
-        painter.drawEllipse(QPointF(cx, cy), 3, 3)
-
-        # Bank-angle scale: fixed white dots around the rim, with a rotating pointer.
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("white"))
-        dot_r = radius - 6
-        for deg in _BANK_SCALE_DEGREES:
-            angle_rad = math.radians(deg)
-            x = cx + dot_r * math.sin(angle_rad)
-            y = cy - dot_r * math.cos(angle_rad)
-            painter.drawEllipse(QPointF(x, y), 2, 2)
-
-        painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(-self._roll)
-        tri_r = radius - 4
         painter.setBrush(QColor("#ffd000"))
         painter.drawPolygon(QPolygonF([
-            QPointF(0, -tri_r),
-            QPointF(-5, -tri_r + 8),
-            QPointF(5, -tri_r + 8),
+            QPointF(0,  -ptr_r),
+            QPointF(-5, -ptr_r + 11),
+            QPointF(5,  -ptr_r + 11),
+        ]))
+
+        painter.restore()   # removes clip + all rolling transforms
+
+        # ── Fixed aircraft symbol (yellow wings + centre dot) ──────────────
+        painter.setPen(QPen(QColor("#ffd000"), 3))
+        painter.drawLine(QPointF(cx - radius * 0.45, cy), QPointF(cx - radius * 0.13, cy))
+        painter.drawLine(QPointF(cx + radius * 0.13, cy), QPointF(cx + radius * 0.45, cy))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#ffd000"))
+        painter.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
+
+        # ── Bank-angle scale: tick marks at ±10 ±20 ±30 ±45 ±60 ──────────
+        painter.save()
+        painter.translate(cx, cy)
+        for deg, tick_len, tick_w in [
+            (-60, 11, 2.0), (-45,  7, 1.5), (-30, 11, 2.0),
+            (-20,  7, 1.5), (-10,  5, 1.5),
+            ( 10,  5, 1.5), ( 20,  7, 1.5),
+            ( 30, 11, 2.0), ( 45,  7, 1.5), ( 60, 11, 2.0),
+        ]:
+            painter.save()
+            painter.rotate(deg)
+            painter.setPen(QPen(QColor("white"), tick_w))
+            painter.drawLine(QPointF(0, -(radius - 2)),
+                             QPointF(0, -(radius - 2) + tick_len))
+            painter.restore()
+        painter.restore()
+
+        # ── Fixed 0° reference: white ∇ just above the circle rim ─────────
+        painter.save()
+        painter.translate(cx, cy)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("white"))
+        ref_r = radius + 2
+        painter.drawPolygon(QPolygonF([
+            QPointF(-5, -ref_r),
+            QPointF(5,  -ref_r),
+            QPointF(0,  -ref_r + 11),
         ]))
         painter.restore()
 
-        painter.setPen(QPen(QColor("#444444"), 2))
+        # ── Outer ring ────────────────────────────────────────────────────
+        painter.setPen(QPen(QColor("#555555"), 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
 
@@ -418,10 +441,11 @@ class AttitudePanel(QWidget):
         self.bat1_volt_gauge.set_cell_count(cell_count)
         self.bat2_volt_gauge.set_cell_count(cell_count)
 
-    def set_battery_hv_mode(self, is_hv: bool):
-        """Enable/disable LiHV high voltage mode."""
-        self.bat1_volt_gauge.set_hv_mode(is_hv)
-        self.bat2_volt_gauge.set_hv_mode(is_hv)
+    def set_battery_chemistry(self, instance: int, chemistry: str):
+        """Set cell chemistry ('lipo'/'lihv'/'liuhv') for battery instance 1 or 2."""
+        gauge = self._bat_volt_gauges.get(instance)
+        if gauge is not None:
+            gauge.set_chemistry(chemistry)
 
     def set_current_thresholds(self, green: float, red: float):
         """Update the green/red coloring thresholds for the current gauges."""
