@@ -58,6 +58,7 @@ AIRSPEED_CANDIDATES = [("ARSP", "Airspeed", 1.0), ("VFR_HUD", "airspeed", 1.0)]
 RSSI_CANDIDATES = [
     ("RSSI",        "RSSI",   "RSSI (встроенный приёмник)"),
     ("RC_CHANNELS", "rssi",   "RSSI (RC_CHANNELS)"),
+    ("RAD",         "RSSI",   "RSSI (радиомодем SiK)"),
     ("RADIO",       "rssi",   "RSSI (радиомодем SiK, local)"),
     ("RADIO_STATUS","rssi",   "RSSI (RADIO_STATUS)"),
 ]
@@ -110,8 +111,8 @@ class MainWindow(QMainWindow):
         self._tile_handler = tile_handler
         self.setWindowTitle(f"ОМДЖЕТ ЛОГ Анализатор  v{APP_VERSION}")
         self.setWindowIcon(QIcon(str(_ASSETS_DIR / "logo.ico")))
-        self.resize(1920, 1000)
-        self.setMinimumWidth(1920)
+        self.resize(1900, 1000)
+        self.setMinimumWidth(800)
 
         self.log_data: LogData | None = None
         self._worker: LogLoadWorker | None = None
@@ -130,6 +131,7 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._build_status_bar()
         self._connect_settings_signals()
+        QTimer.singleShot(0, lambda: self._main_splitter.setSizes([850, 1050]))
 
     def _build_status_bar(self):
         status = QStatusBar()
@@ -154,8 +156,12 @@ class MainWindow(QMainWindow):
         self.map_widget.set_icon_mapping(initial_mapping)
         self.settings_widget.efficiency_thresholds_changed.connect(self.mission_analysis_widget.set_efficiency_thresholds)
         self.mission_analysis_widget.set_efficiency_thresholds(*self.settings_widget.get_efficiency_thresholds())
+        self.settings_widget.hover_thrust_thresholds_changed.connect(self.mission_analysis_widget.set_hover_thrust_thresholds)
+        self.mission_analysis_widget.set_hover_thrust_thresholds(*self.settings_widget.get_hover_thrust_thresholds())
         self.settings_widget.cog_thresholds_changed.connect(self.mission_analysis_widget.set_cog_thresholds)
         self.mission_analysis_widget.set_cog_thresholds(*self.settings_widget.get_cog_thresholds())
+        self.settings_widget.snr_range_changed.connect(self.link_quality_widget.set_snr_range)
+        self.link_quality_widget.set_snr_range(*self.settings_widget.get_snr_range())
         self.settings_widget.callout_style_changed.connect(self.map_widget.set_callout_style)
         self.settings_widget.callout_fields_changed.connect(self.map_widget.set_callout_fields)
         style, show_t, show_s, show_d = self.settings_widget.get_callout_settings()
@@ -279,6 +285,7 @@ class MainWindow(QMainWindow):
         playback_row.addStretch()
         playback_row.addWidget(self.map_widget.show_errors_checkbox)
         playback_row.addWidget(self.map_widget.show_wind_checkbox)
+        playback_row.addWidget(self.map_widget.show_photos_checkbox)
         errors_separator = QFrame()
         errors_separator.setFrameShape(QFrame.VLine)
         errors_separator.setFrameShadow(QFrame.Sunken)
@@ -303,12 +310,6 @@ class MainWindow(QMainWindow):
         follow_separator.setFrameShadow(QFrame.Sunken)
         playback_row.addWidget(follow_separator)
         playback_row.addWidget(self.map_widget.follow_checkbox)
-        playback_row.addSpacing(20)
-        photo_separator = QFrame()
-        photo_separator.setFrameShape(QFrame.VLine)
-        photo_separator.setFrameShadow(QFrame.Sunken)
-        playback_row.addWidget(photo_separator)
-        playback_row.addWidget(self.map_widget.show_photos_checkbox)
         playback_row.addSpacing(20)
         photo_count_separator = QFrame()
         photo_count_separator.setFrameShape(QFrame.VLine)
@@ -371,7 +372,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.right_tabs)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([225, 1175])
+        self._main_splitter = splitter
 
         self.rc_panel = RCPanel()
         self.motor_servo_panel = MotorServoPanel()
@@ -728,20 +729,40 @@ class MainWindow(QMainWindow):
             self.link_quality_widget.clear()
             return
 
-        # Find RSSI data
+        # Prefer RAD/RADIO message — contains noise fields for SNR calculation
+        radio = self.log_data.messages.get("RAD") or self.log_data.messages.get("RADIO")
+        if radio and all(f in radio for f in ("RSSI", "Noise", "RemRSSI", "RemNoise")):
+            rssi_v = np.asarray(radio["RSSI"], dtype=float)
+            if len(rssi_v):
+                rssi_t     = np.asarray(radio["timestamp"], dtype=float)
+                noise_v    = np.asarray(radio["Noise"],    dtype=float)
+                remrssi_v  = np.asarray(radio["RemRSSI"],  dtype=float)
+                remnoise_v = np.asarray(radio["RemNoise"], dtype=float)
+                raw_max = float(rssi_v.max())
+                rssi_max = 100.0 if raw_max <= 100.0 else 255.0
+                self.link_quality_widget.load(
+                    gps_t, gps_lat, gps_lon,
+                    rssi_t, rssi_v, noise_v, remrssi_v, remnoise_v,
+                    rssi_max, "RSSI (радиомодем SiK)"
+                )
+                return
+
+        # Fallback: other RSSI sources without noise data
         for msg_type, rssi_field, label in RSSI_CANDIDATES:
+            if msg_type in ("RADIO", "RAD"):
+                continue
             table = self.log_data.messages.get(msg_type)
             if table and rssi_field in table:
                 rssi_v = np.asarray(table[rssi_field], dtype=float)
                 if not len(rssi_v):
                     continue
                 rssi_t = np.asarray(table["timestamp"], dtype=float)
-                # Auto-detect scale: ArduPilot uses 0-255; ExpressLRS/ELRS uses 0-100
                 raw_max = float(rssi_v.max())
                 rssi_max = 100.0 if raw_max <= 100.0 else 255.0
                 self.link_quality_widget.load(
                     gps_t, gps_lat, gps_lon,
-                    rssi_t, rssi_v, rssi_max, label
+                    rssi_t, rssi_v, None, None, None,
+                    rssi_max, label
                 )
                 return
 

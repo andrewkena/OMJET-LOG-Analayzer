@@ -12,6 +12,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QPushButton
 
 from app.core import i18n
@@ -23,6 +24,41 @@ _MODE_COLOR_PALETTE = [
     "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
     "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
 ]
+
+
+class _WindHighlightSample(QWidget):
+    """Small fixed-size widget painting a wind-exceeded track segment preview."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(56, 14)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        y = h // 2
+
+        # Outer glow (white, wide, semi-transparent) — drawn first (bottom layer)
+        pen = QPen(QColor(255, 255, 255, 90), 12)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawLine(4, y, w - 4, y)
+
+        # Inner bright line (white, narrower)
+        pen = QPen(QColor(255, 255, 255, 200), 5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawLine(4, y, w - 4, y)
+
+        # Track on top (red)
+        pen = QPen(QColor("#ff0000"), 2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawLine(4, y, w - 4, y)
+
+        p.end()
 
 
 class MapBridge(QObject):
@@ -213,12 +249,12 @@ function _calloutHtml() {
     if (_calloutFields.time && _calloutTime) parts.push(_calloutTime);
     if (_calloutFields.speed) {
         if (_calloutSpeed !== null && _calloutAirspeed !== null) {
-            parts.push('Земля: ' + _calloutSpeed + ' м/с');
-            parts.push('Возд: ' + _calloutAirspeed + ' м/с');
+            parts.push('GS: ' + _calloutSpeed + ' м/с');
+            parts.push('AS: ' + _calloutAirspeed + ' м/с');
         } else if (_calloutSpeed !== null) {
             parts.push(_calloutSpeed + ' м/с');
         } else if (_calloutAirspeed !== null) {
-            parts.push('Возд: ' + _calloutAirspeed + ' м/с');
+            parts.push('AS: ' + _calloutAirspeed + ' м/с');
         }
     }
     if (_calloutFields.distance && _calloutDist !== null) parts.push(_calloutDist);
@@ -698,8 +734,13 @@ class MapWidget(QWidget):
         self._wind_title_label.setStyleSheet("color: white; font-weight: bold;")
         self.wind_value_label = QLabel(f"{self._max_wind:.0f} м/с")
         self.wind_value_label.setStyleSheet("color: white;")
+        wind_value_row = QHBoxLayout()
+        wind_value_row.setSpacing(6)
+        wind_value_row.addWidget(self.wind_value_label)
+        wind_value_row.addWidget(_WindHighlightSample())
+        wind_value_row.addStretch()
         wind_panel_layout.addWidget(self._wind_title_label)
-        wind_panel_layout.addWidget(self.wind_value_label)
+        wind_panel_layout.addLayout(wind_value_row)
         self.wind_panel.adjustSize()
         self.wind_panel.setVisible(self.show_wind_checkbox.isChecked())
 
@@ -737,8 +778,8 @@ class MapWidget(QWidget):
         for i, (lbl, _) in enumerate(self._BASEMAP_TYPES):
             self.basemap_combo.setItemText(i, tr(lbl))
         self.follow_checkbox.setText(tr("Центрировать"))
-        self.show_photos_checkbox.setText(tr("Отобразить фотографии"))
-        self.icon_size_label.setText(tr("Размер иконки:"))
+        self.show_photos_checkbox.setText(tr("Фотографии"))
+        self.icon_size_label.setText(tr("Иконка:"))
         self.show_errors_checkbox.setText(tr("Ошибки"))
         self.show_wind_checkbox.setText(tr("Ветер"))
         self._error_legend_title.setText(tr("Ошибки и сбои"))
@@ -1066,14 +1107,14 @@ class MapWidget(QWidget):
         self._photo_count_trig = trig_count
         tr = i18n.tr
         if not cam_count and not trig_count:
-            self.photo_count_label.setText(tr("Количество фотографий нет"))
+            self.photo_count_label.setText(tr("Количество фото: нет"))
             return
         parts = []
         if cam_count:
             parts.append(f"<span style='color:#ffeb3b;'>&#9632;</span> {cam_count}")
         if trig_count:
             parts.append(f"<span style='color:#3cb44b;'>&#9632;</span> {trig_count}")
-        self.photo_count_label.setText(tr("Количество фотографий ") + "&nbsp;&nbsp;&nbsp;".join(parts))
+        self.photo_count_label.setText(tr("Количество фото: ") + "&nbsp;&nbsp;&nbsp;".join(parts))
 
     def _on_icon_size_changed(self, text: str):
         scale = float(text.lstrip("x"))

@@ -43,6 +43,7 @@ class SettingsWidget(QWidget):
     speed_thresholds_changed = Signal(float, float, float)
     max_wind_changed = Signal(float)
     efficiency_thresholds_changed = Signal(float, float, float)
+    hover_thrust_thresholds_changed = Signal(float, float)
     theme_changed = Signal(str)
     timezone_changed = Signal(float)
     language_changed = Signal(str)
@@ -50,6 +51,7 @@ class SettingsWidget(QWidget):
     cog_thresholds_changed = Signal(float, float, float, float)
     callout_style_changed = Signal(str)
     callout_fields_changed = Signal(bool, bool, bool)
+    snr_range_changed = Signal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,6 +68,8 @@ class SettingsWidget(QWidget):
         self._eff_green = 200
         self._eff_yellow = 300
         self._eff_red = 400
+        self._hover_thrust_green = 0.5
+        self._hover_thrust_red = 1.0
         self._cog_neutral_min = -3.0
         self._cog_neutral_max = 3.0
         self._cog_front_red = 10.0
@@ -338,6 +342,28 @@ class SettingsWidget(QWidget):
         eff_row.addWidget(self.eff_red_spin)
         self.eff_row_label = QLabel()
         efficiency_layout.addRow(self.eff_row_label, eff_row)
+
+        hover_thrust_row = QHBoxLayout()
+        hover_thrust_row.addWidget(self._make_dot("#3cb44b"))
+        self.hover_thrust_green_spin = QDoubleSpinBox()
+        self.hover_thrust_green_spin.setRange(0.0, 2.0)
+        self.hover_thrust_green_spin.setDecimals(2)
+        self.hover_thrust_green_spin.setSingleStep(0.05)
+        self.hover_thrust_green_spin.setValue(self._hover_thrust_green)
+        self.hover_thrust_green_spin.valueChanged.connect(self._on_hover_thrust_thresholds_changed)
+        hover_thrust_row.addWidget(self.hover_thrust_green_spin)
+        hover_thrust_row.addWidget(self._make_dot("#e6194b"))
+        self.hover_thrust_red_spin = QDoubleSpinBox()
+        self.hover_thrust_red_spin.setRange(0.0, 2.0)
+        self.hover_thrust_red_spin.setDecimals(2)
+        self.hover_thrust_red_spin.setSingleStep(0.05)
+        self.hover_thrust_red_spin.setValue(self._hover_thrust_red)
+        self.hover_thrust_red_spin.valueChanged.connect(self._on_hover_thrust_thresholds_changed)
+        hover_thrust_row.addWidget(self.hover_thrust_red_spin)
+        hover_thrust_row.addStretch()
+        self.hover_thrust_row_label = QLabel()
+        efficiency_layout.addRow(self.hover_thrust_row_label, hover_thrust_row)
+
         layout.addWidget(self.efficiency_group)
 
         # ── Center of Gravity thresholds ─────────────────────────────────────
@@ -394,6 +420,38 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(self.cog_group)
 
+        # ── SNR range ─────────────────────────────────────────────────────────
+        self.snr_group = QGroupBox()
+        snr_layout = QFormLayout(self.snr_group)
+
+        self.snr_min_spin = QDoubleSpinBox()
+        self.snr_min_spin.setRange(-50.0, 200.0)
+        self.snr_min_spin.setDecimals(1)
+        self.snr_min_spin.setSingleStep(1.0)
+        self.snr_min_spin.setValue(0.0)
+        self.snr_min_spin.valueChanged.connect(self._on_snr_range_changed)
+        snr_min_row = QHBoxLayout()
+        snr_min_row.addWidget(self._make_dot("#e6194b"))
+        snr_min_row.addWidget(self.snr_min_spin)
+        snr_min_row.addStretch()
+        self.snr_min_label = QLabel()
+        snr_layout.addRow(self.snr_min_label, snr_min_row)
+
+        self.snr_max_spin = QDoubleSpinBox()
+        self.snr_max_spin.setRange(-50.0, 200.0)
+        self.snr_max_spin.setDecimals(1)
+        self.snr_max_spin.setSingleStep(1.0)
+        self.snr_max_spin.setValue(150.0)
+        self.snr_max_spin.valueChanged.connect(self._on_snr_range_changed)
+        snr_max_row = QHBoxLayout()
+        snr_max_row.addWidget(self._make_dot("#3cb44b"))
+        snr_max_row.addWidget(self.snr_max_spin)
+        snr_max_row.addStretch()
+        self.snr_max_label = QLabel()
+        snr_layout.addRow(self.snr_max_label, snr_max_row)
+
+        layout.addWidget(self.snr_group)
+
         left_layout.addStretch()
         right_layout.addStretch()
 
@@ -438,12 +496,17 @@ class SettingsWidget(QWidget):
 
         self.efficiency_group.setTitle(tr("Пороги эффективности"))
         self.eff_row_label.setText(tr("Расход (мА·ч):"))
+        self.hover_thrust_row_label.setText(tr("Вертикальная тяга Q_M_THST_HOVER:"))
 
         self.cog_group.setTitle(tr("Центровка"))
         self.cog_neutral_label.setText(tr("Нейтральная:"))
         self.cog_neutral_to_label.setText(tr("до"))
         self.cog_front_label.setText(tr("Передняя (красный порог):"))
         self.cog_rear_label.setText(tr("Задняя (красный порог):"))
+
+        self.snr_group.setTitle(tr("Качество связи (SNR)"))
+        self.snr_min_label.setText(tr("Минимальный SNR:"))
+        self.snr_max_label.setText(tr("Максимальный SNR:"))
 
         self.info_lipo_title.setText("LiPo / Li-ion:")
         self.info_lipo_full.setText(tr("  • Заряжен: 4.20В/ячейку"))
@@ -577,6 +640,18 @@ class SettingsWidget(QWidget):
     def get_efficiency_thresholds(self) -> tuple[float, float, float]:
         return float(self._eff_green), float(self._eff_yellow), float(self._eff_red)
 
+    def _on_hover_thrust_thresholds_changed(self):
+        green_v = self.hover_thrust_green_spin.value()
+        red_v = self.hover_thrust_red_spin.value()
+        if red_v < green_v:
+            self.hover_thrust_red_spin.setValue(green_v)
+            return
+        self._hover_thrust_green, self._hover_thrust_red = green_v, red_v
+        self.hover_thrust_thresholds_changed.emit(green_v, red_v)
+
+    def get_hover_thrust_thresholds(self) -> tuple[float, float]:
+        return self._hover_thrust_green, self._hover_thrust_red
+
     def _on_cog_thresholds_changed(self):
         neutral_min = self.cog_neutral_min_spin.value()
         neutral_max = self.cog_neutral_max_spin.value()
@@ -590,6 +665,17 @@ class SettingsWidget(QWidget):
 
     def get_cog_thresholds(self) -> tuple[float, float, float, float]:
         return self._cog_neutral_min, self._cog_neutral_max, self._cog_front_red, self._cog_rear_red
+
+    def _on_snr_range_changed(self):
+        snr_min = self.snr_min_spin.value()
+        snr_max = self.snr_max_spin.value()
+        if snr_max <= snr_min:
+            self.snr_max_spin.setValue(snr_min + 1.0)
+            return
+        self.snr_range_changed.emit(snr_min, snr_max)
+
+    def get_snr_range(self) -> tuple[float, float]:
+        return self.snr_min_spin.value(), self.snr_max_spin.value()
 
     def _on_max_wind_changed(self, value: int):
         self._max_wind = value

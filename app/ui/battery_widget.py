@@ -92,6 +92,21 @@ class BatteryWidget(QWidget):
         ):
             label.setText("—")
 
+    @staticmethod
+    def _max_sustained(t: np.ndarray, v: np.ndarray, duration: float = 2.0) -> float:
+        """Max value from v sustained continuously for ≥ duration seconds."""
+        n = len(t)
+        if n == 0:
+            return 0.0
+        best = 0.0
+        for i in range(n):
+            j = int(np.searchsorted(t, t[i] + duration))
+            if j < n:
+                window_min = float(np.min(v[i:j + 1]))
+                if window_min > best:
+                    best = window_min
+        return best
+
     def _stats(self, sub,
                gate: list[tuple[np.ndarray, np.ndarray]] | None = None,
                ) -> tuple[float | None, float | None, float | None]:
@@ -111,7 +126,7 @@ class BatteryWidget(QWidget):
         if "Curr" in sub and len(sub["Curr"]):
             t = np.asarray(sub["timestamp"], dtype=float)
             curr = np.asarray(sub["Curr"], dtype=float)
-            max_curr = float(np.max(curr))
+            max_curr = self._max_sustained(t, curr) or float(np.max(curr))
 
             if gate:
                 mask = np.zeros(len(t), dtype=bool)

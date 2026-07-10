@@ -606,6 +606,7 @@ class _GnssImportDialog(QDialog):
         mw = parent.window() if parent else None
         w = mw.width() if mw else 900
         self.resize(w, 540)
+        self.setMinimumWidth(w)
         self._path = path
         self._result: list[dict] | None = None
 
@@ -1133,6 +1134,9 @@ class PhotoGeotagWidget(QWidget):
         self.summary_label = QLabel()
         self.import_gnss_button = QPushButton()
         self.import_gnss_button.clicked.connect(self._on_import_gnss_clicked)
+        self.clear_gnss_button = QPushButton()
+        self.clear_gnss_button.clicked.connect(self._on_clear_gnss_clicked)
+        self.clear_gnss_button.setEnabled(False)
         self.export_button = QPushButton()
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_csv)
@@ -1197,6 +1201,7 @@ class PhotoGeotagWidget(QWidget):
         gnss_header_row = QHBoxLayout()
         gnss_header_row.addWidget(self.gnss_label)
         gnss_header_row.addStretch()
+        gnss_header_row.addWidget(self.clear_gnss_button)
         gnss_header_row.addWidget(self.import_gnss_button)
         gnss_layout.addLayout(gnss_header_row)
         gnss_layout.addWidget(self.gnss_table)
@@ -1228,6 +1233,7 @@ class PhotoGeotagWidget(QWidget):
     def _retranslateUi(self):
         tr = i18n.tr
         self.import_gnss_button.setText(tr("Открыть файл геометок GNSS..."))
+        self.clear_gnss_button.setText(tr("Очистить геометки GNSS"))
         self.export_button.setText(tr("Экспорт в CSV"))
         if not self._rows:
             self.summary_label.setText(tr("Фотографии не найдены"))
@@ -1475,7 +1481,19 @@ class PhotoGeotagWidget(QWidget):
             self._apply_gnss_row_style(r)
 
         self._update_gnss_label()
+        self.clear_gnss_button.setEnabled(True)
         self.map.set_gnss_points(self._gnss_points)
+
+    def _on_clear_gnss_clicked(self):
+        self._gnss_geotags = []
+        self._gnss_points = []
+        self._gnss_excluded = set()
+        self._gnss_outliers = []
+        self.gnss_table.setRowCount(0)
+        self.map.set_gnss_points([])
+        self.map.set_gnss_excluded([])
+        self.clear_gnss_button.setEnabled(False)
+        self.gnss_label.setText(i18n.tr("Геометки GNSS не загружены"))
 
     def _active_gnss_geotags(self) -> list[dict]:
         return [p for i, p in enumerate(self._gnss_geotags) if i not in self._gnss_excluded]

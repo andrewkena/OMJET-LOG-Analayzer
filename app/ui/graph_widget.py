@@ -1,4 +1,4 @@
-"""Time-series plot widget, multi-curve, with a synced cursor (like plot.ardupilot.org)."""
+"""Time-series plot widget, multi-curve, independent Y axis per curve."""
 from __future__ import annotations
 
 import numpy as np
@@ -22,8 +22,10 @@ class GraphWidget(QWidget):
         self.time_axis = TimeAxisItem(orientation="bottom")
         self.plot_widget = pg.PlotWidget(axisItems={"bottom": self.time_axis})
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.addLegend()
-        self.legend = self.plot_widget.plotItem.legend
+
+        pi = self.plot_widget.plotItem
+        pi.addLegend()
+        self.legend = pi.legend
 
         self.stats_label = QLabel()
         self.stats_label.setWordWrap(True)
@@ -34,9 +36,29 @@ class GraphWidget(QWidget):
         layout.addWidget(self.plot_widget)
         layout.addWidget(self.stats_label)
 
+        # slot 0  → main ViewBox (pi.vb) with existing left Y axis
+        # slots 1‥MAX_CURVES-1 → secondary ViewBoxes with right Y axes
+        self._all_vbs: list[pg.ViewBox] = [pi.vb]
+        self._right_axes: list[pg.AxisItem] = []
+        for i in range(MAX_CURVES - 1):
+            vb = pg.ViewBox()
+            pi.scene().addItem(vb)
+            ax = pg.AxisItem("right")
+            pi.layout.addItem(ax, 2, 3 + i)
+            ax.linkToView(vb)
+            vb.setXLink(pi)
+            vb.setVisible(False)
+            ax.setVisible(False)
+            self._all_vbs.append(vb)
+            self._right_axes.append(ax)
+
+        pi.vb.sigResized.connect(self._sync_vb_geometry)
+
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._curve_t: dict[str, np.ndarray] = {}
         self._curve_y: dict[str, np.ndarray] = {}
+        self._curve_slot: dict[str, int] = {}   # key → slot index (0 = main VB)
+        self._curve_label: dict[str, str] = {}
         self._minmax_items: dict[str, tuple] = {}
         self._hover_items: dict[str, tuple[pg.ScatterPlotItem, pg.TextItem]] = {}
         self._color_idx = 0
@@ -54,6 +76,32 @@ class GraphWidget(QWidget):
         self.plot_widget.addItem(self.selection_region, ignoreBounds=True)
         self.selection_region.hide()
 
+    # ------------------------------------------------------------------ #
+    #  Internal helpers                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _sync_vb_geometry(self):
+        rect = self.plot_widget.plotItem.vb.sceneBoundingRect()
+        for vb in self._all_vbs[1:]:
+            if vb.isVisible():
+                vb.setGeometry(rect)
+
+    def _free_slot(self) -> int:
+        used = set(self._curve_slot.values())
+        for i in range(MAX_CURVES):
+            if i not in used:
+                return i
+        return 0
+
+    def _next_color(self) -> str:
+        c = _COLORS[self._color_idx % len(_COLORS)]
+        self._color_idx += 1
+        return c
+
+    # ------------------------------------------------------------------ #
+    #  Wheel zoom – per-axis                                               #
+    # ------------------------------------------------------------------ #
+
     def eventFilter(self, obj, event):
         if obj is self.plot_widget.viewport() and event.type() == QEvent.Type.Wheel:
             delta = event.angleDelta().y()
@@ -61,33 +109,43 @@ class GraphWidget(QWidget):
                 return False
             factor = 0.85 if delta > 0 else 1.0 / 0.85
 
-            vb = self.plot_widget.plotItem.vb
+            pi = self.plot_widget.plotItem
+            main_vb = pi.vb
             try:
                 vp_pos = event.position().toPoint()
             except AttributeError:
                 vp_pos = event.pos()
             scene_pos = self.plot_widget.mapToScene(vp_pos)
-            scene_rect = vb.sceneBoundingRect()
+            scene_rect = main_vb.sceneBoundingRect()
 
             if scene_pos.x() < scene_rect.left():
-                # Mouse is over the Y (left) axis — zoom Y only
-                data_pt = vb.mapSceneToView(scene_pos)
-                vb.scaleBy((1.0, factor), pg.Point(data_pt.x(), data_pt.y()))
+                # Left Y axis → zoom main VB Y only
+                data_pt = main_vb.mapSceneToView(scene_pos)
+                main_vb.scaleBy((1.0, factor), pg.Point(data_pt.x(), data_pt.y()))
                 return True
             if scene_pos.y() > scene_rect.bottom():
-                # Mouse is over the X (bottom) axis — zoom X only
-                data_pt = vb.mapSceneToView(pg.Point(scene_pos.x(), scene_rect.center().y()))
-                vb.scaleBy((factor, 1.0), pg.Point(data_pt.x(), data_pt.y()))
+                # X axis → zoom X (shared; all linked VBs follow)
+                data_pt = main_vb.mapSceneToView(
+                    pg.Point(scene_pos.x(), scene_rect.center().y())
+                )
+                main_vb.scaleBy((factor, 1.0), pg.Point(data_pt.x(), data_pt.y()))
                 return True
+            if scene_pos.x() > scene_rect.right():
+                # Right Y axes → zoom the matching secondary VB only
+                for i, ax in enumerate(self._right_axes):
+                    if ax.isVisible() and ax.sceneBoundingRect().contains(scene_pos):
+                        sec_vb = self._all_vbs[i + 1]
+                        data_pt = sec_vb.mapSceneToView(scene_pos)
+                        sec_vb.scaleBy((1.0, factor), pg.Point(data_pt.x(), data_pt.y()))
+                        return True
         return False
+
+    # ------------------------------------------------------------------ #
+    #  Public API                                                          #
+    # ------------------------------------------------------------------ #
 
     def set_time_origin(self, t0: float):
         self.time_axis.set_origin(t0)
-
-    def _next_color(self) -> str:
-        c = _COLORS[self._color_idx % len(_COLORS)]
-        self._color_idx += 1
-        return c
 
     def curve_count(self) -> int:
         return len(self._curves)
@@ -97,29 +155,74 @@ class GraphWidget(QWidget):
             return True
         if len(self._curves) >= MAX_CURVES:
             return False
+
         color = self._next_color()
         pen = pg.mkPen(color, width=1.5)
-        curve = self.plot_widget.plot(t, y, pen=pen, name=label)
+        slot = self._free_slot()
+        vb = self._all_vbs[slot]
+
+        if slot > 0:
+            ax = self._right_axes[slot - 1]
+            ax.setPen(pg.mkPen(color))
+            ax.setTextPen(pg.mkPen(color))
+            vb.setVisible(True)
+            ax.setVisible(True)
+            vb.setGeometry(self.plot_widget.plotItem.vb.sceneBoundingRect())
+
+        t_arr = np.asarray(t, dtype=float)
+        y_arr = np.asarray(y, dtype=float)
+        curve = pg.PlotDataItem(t_arr, y_arr, pen=pen, name=label)
+        vb.addItem(curve)
+        self.legend.addItem(curve, label)
+
         self._curves[key] = curve
-        self._curve_t[key] = np.asarray(t, dtype=float)
-        self._curve_y[key] = np.asarray(y, dtype=float)
-        self._add_minmax_markers(key, color)
-        self._add_hover_marker(key, color)
+        self._curve_t[key] = t_arr
+        self._curve_y[key] = y_arr
+        self._curve_slot[key] = slot
+        self._curve_label[key] = label
+
+        self._add_minmax_markers(key, color, vb)
+        self._add_hover_marker(key, color, vb)
         self._update_hover(self._last_cursor_t)
         self._update_stats()
         return True
 
     def remove_curve(self, key: str):
+        slot = self._curve_slot.pop(key, None)
+        if slot is None:
+            return
+        vb = self._all_vbs[slot]
+
         curve = self._curves.pop(key, None)
+        lbl = self._curve_label.pop(key, None)
         if curve is not None:
-            self.plot_widget.removeItem(curve)
-            self.legend.removeItem(curve.name())
+            vb.removeItem(curve)
+            try:
+                self.legend.removeItem(lbl or curve.name())
+            except Exception:
+                pass
+
+        for item in self._minmax_items.pop(key, ()):
+            try:
+                vb.removeItem(item)
+            except Exception:
+                pass
+
+        pair = self._hover_items.pop(key, None)
+        if pair:
+            for item in pair:
+                try:
+                    vb.removeItem(item)
+                except Exception:
+                    pass
+
         self._curve_t.pop(key, None)
         self._curve_y.pop(key, None)
-        for item in self._minmax_items.pop(key, ()):
-            self.plot_widget.removeItem(item)
-        for item in self._hover_items.pop(key, ()):
-            self.plot_widget.removeItem(item)
+
+        if slot > 0:
+            self._all_vbs[slot].setVisible(False)
+            self._right_axes[slot - 1].setVisible(False)
+
         self._update_stats()
 
     def clear_all(self):
@@ -127,31 +230,41 @@ class GraphWidget(QWidget):
             self.remove_curve(key)
         self._color_idx = 0
 
-    def _add_minmax_markers(self, key: str, color: str):
+    # ------------------------------------------------------------------ #
+    #  Markers                                                             #
+    # ------------------------------------------------------------------ #
+
+    def _add_minmax_markers(self, key: str, color: str, vb: pg.ViewBox):
         t = self._curve_t[key]
         y = self._curve_y[key]
         if len(y) == 0 or np.all(np.isnan(y)):
             return
         imin = int(np.nanargmin(y))
         imax = int(np.nanargmax(y))
-        min_dot = pg.ScatterPlotItem(x=[t[imin]], y=[y[imin]], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=9)
-        max_dot = pg.ScatterPlotItem(x=[t[imax]], y=[y[imax]], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=9)
+        min_dot = pg.ScatterPlotItem(
+            x=[t[imin]], y=[y[imin]], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=9
+        )
+        max_dot = pg.ScatterPlotItem(
+            x=[t[imax]], y=[y[imax]], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=9
+        )
         min_label = pg.TextItem(f"min {y[imin]:.3g}", color=color, anchor=(0.5, 0))
         min_label.setPos(t[imin], y[imin])
         max_label = pg.TextItem(f"max {y[imax]:.3g}", color=color, anchor=(0.5, 1))
         max_label.setPos(t[imax], y[imax])
         items = (min_dot, max_dot, min_label, max_label)
         for item in items:
-            self.plot_widget.addItem(item, ignoreBounds=True)
+            vb.addItem(item, ignoreBounds=True)
         self._minmax_items[key] = items
 
-    def _add_hover_marker(self, key: str, color: str):
-        dot = pg.ScatterPlotItem(x=[], y=[], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=8)
+    def _add_hover_marker(self, key: str, color: str, vb: pg.ViewBox):
+        dot = pg.ScatterPlotItem(
+            x=[], y=[], pen=pg.mkPen(color), brush=pg.mkBrush(color), size=8
+        )
         dot.setZValue(10)
         label = pg.TextItem("", color=color, anchor=(0, 1))
         label.setZValue(10)
-        self.plot_widget.addItem(dot, ignoreBounds=True)
-        self.plot_widget.addItem(label, ignoreBounds=True)
+        vb.addItem(dot, ignoreBounds=True)
+        vb.addItem(label, ignoreBounds=True)
         dot.hide()
         label.hide()
         self._hover_items[key] = (dot, label)
@@ -179,6 +292,10 @@ class GraphWidget(QWidget):
             label.setText(f"{yv:.3g}")
             label.show()
 
+    # ------------------------------------------------------------------ #
+    #  Cursor / selection                                                  #
+    # ------------------------------------------------------------------ #
+
     def set_cursor_time(self, t: float):
         self.vline.setPos(t)
         self._last_cursor_t = t
@@ -190,6 +307,10 @@ class GraphWidget(QWidget):
 
     def clear_selected_range(self):
         self.selection_region.hide()
+
+    # ------------------------------------------------------------------ #
+    #  Stats bar                                                           #
+    # ------------------------------------------------------------------ #
 
     def _update_stats(self):
         if not self._curve_y:

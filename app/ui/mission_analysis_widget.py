@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel, QPushButton,
 )
@@ -177,6 +178,17 @@ class MissionAnalysisWidget(QWidget):
                     self.avg_roll_label, self.avg_pitch_label):
             self.attitude_layout.addRow(" ", lbl)
 
+        self.radio_group = QGroupBox()
+        self.radio_layout = QFormLayout(self.radio_group)
+        self.radio_snr_local_avg_label = QLabel("—")
+        self.radio_snr_remote_avg_label = QLabel("—")
+        self.radio_rssi_min_label = QLabel("—")
+        self.radio_noise_max_label = QLabel("—")
+        self.radio_layout.addRow(" ", self.radio_snr_local_avg_label)
+        self.radio_layout.addRow(" ", self.radio_snr_remote_avg_label)
+        self.radio_layout.addRow(" ", self.radio_rssi_min_label)
+        self.radio_layout.addRow(" ", self.radio_noise_max_label)
+
         self.photo_group = QGroupBox()
         self.photo_layout = QFormLayout(self.photo_group)
         self.cam_count_label = QLabel("—")
@@ -203,12 +215,29 @@ class MissionAnalysisWidget(QWidget):
         self.speed_group = QGroupBox()
         self.speed_layout = QFormLayout(self.speed_group)
         self.max_fwd_gnd_label = QLabel("—")
+        self.max_fwd_gnd_warn = QLabel("!")
+        self.max_fwd_gnd_warn.setFixedSize(16, 16)
+        self.max_fwd_gnd_warn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.max_fwd_gnd_warn.setStyleSheet(
+            "background-color:#e6194b;color:white;border-radius:8px;font-weight:bold;font-size:11px;"
+        )
+        self.max_fwd_gnd_warn.setToolTip("Значение может быть вычислено неверно")
+        self.max_fwd_gnd_warn.setVisible(False)
+        _gnd_row_w = QWidget()
+        _gnd_row_l = QHBoxLayout(_gnd_row_w)
+        _gnd_row_l.setContentsMargins(0, 0, 0, 0)
+        _gnd_row_l.setSpacing(5)
+        _gnd_row_l.addWidget(self.max_fwd_gnd_label)
+        _gnd_row_l.addWidget(self.max_fwd_gnd_warn)
+        _gnd_row_l.addStretch()
+        self._max_fwd_gnd_row_w = _gnd_row_w
         self.max_fwd_air_label = QLabel("—")
         self.avg_fwd_gnd_label = QLabel("—")
         self.avg_fwd_air_label = QLabel("—")
         self.avg_mission_gnd_label = QLabel("—")
         self.avg_mission_air_label = QLabel("—")
-        for lbl in (self.max_fwd_gnd_label, self.max_fwd_air_label,
+        self.speed_layout.addRow(" ", _gnd_row_w)
+        for lbl in (self.max_fwd_air_label,
                     self.avg_fwd_gnd_label, self.avg_fwd_air_label,
                     self.avg_mission_gnd_label, self.avg_mission_air_label):
             self.speed_layout.addRow(" ", lbl)
@@ -236,8 +265,17 @@ class MissionAnalysisWidget(QWidget):
         self.power_group = QGroupBox()
         self.power_layout = QFormLayout(self.power_group)
         self.hover_thrust_label = QLabel("—")
+        self.hover_thrust_dot = QLabel()
+        self.hover_thrust_dot.setFixedSize(12, 12)
+        self.hover_thrust_dot.setStyleSheet("background-color: gray; border-radius: 6px;")
+        self._hover_thrust_green = 0.5
+        self._hover_thrust_red = 1.0
+        hover_thrust_value_row = QHBoxLayout()
+        hover_thrust_value_row.addWidget(self.hover_thrust_dot)
+        hover_thrust_value_row.addWidget(self.hover_thrust_label)
+        hover_thrust_value_row.addStretch()
         self.hover_thrust_row_label = QLabel()
-        self.power_layout.addRow(self.hover_thrust_row_label, self.hover_thrust_label)
+        self.power_layout.addRow(self.hover_thrust_row_label, hover_thrust_value_row)
 
         self.report_button = QPushButton()
         self.report_button.setEnabled(False)
@@ -258,6 +296,7 @@ class MissionAnalysisWidget(QWidget):
         mid_column = QVBoxLayout()
         mid_column.addWidget(self.attitude_group)
         mid_column.addWidget(self.wind_group)
+        mid_column.addWidget(self.radio_group)
         mid_column.addWidget(self.photo_group)
         mid_column.addStretch()
 
@@ -304,6 +343,12 @@ class MissionAnalysisWidget(QWidget):
         self.attitude_layout.labelForField(self.avg_roll_label).setText(tr("Средний крен:"))
         self.attitude_layout.labelForField(self.avg_pitch_label).setText(tr("Средний тангаж:"))
 
+        self.radio_group.setTitle(tr("Качество радиосвязи"))
+        self.radio_layout.labelForField(self.radio_snr_local_avg_label).setText(tr("Средний SNR на борту:"))
+        self.radio_layout.labelForField(self.radio_snr_remote_avg_label).setText(tr("Средний SNR на земле:"))
+        self.radio_layout.labelForField(self.radio_rssi_min_label).setText(tr("Минимальный RSSI:"))
+        self.radio_layout.labelForField(self.radio_noise_max_label).setText(tr("Максимальный Noise:"))
+
         self.photo_group.setTitle(tr("Фотосъемка"))
         self.photo_layout.labelForField(self.cam_count_label).setText(tr("Количество фотоимпульсов отправленных в камеры:"))
         self.photo_layout.labelForField(self.trig_count_label).setText(tr("Количество фотоимпульсов полученных от камеры:"))
@@ -319,7 +364,7 @@ class MissionAnalysisWidget(QWidget):
         self.altitude_layout.labelForField(self.terrain_var_label).setText(tr("Перепад высот рельефа:"))
 
         self.speed_group.setTitle(tr("Скорость"))
-        self.speed_layout.labelForField(self.max_fwd_gnd_label).setText(tr("Макс. земная скорость (гориз. полёт):"))
+        self.speed_layout.labelForField(self._max_fwd_gnd_row_w).setText(tr("Макс. земная скорость (гориз. полёт):"))
         self.speed_layout.labelForField(self.max_fwd_air_label).setText(tr("Макс. воздушная скорость (гориз. полёт):"))
         self.speed_layout.labelForField(self.avg_fwd_gnd_label).setText(tr("Средняя земная скорость (гориз. полёт):"))
         self.speed_layout.labelForField(self.avg_fwd_air_label).setText(tr("Средняя воздушная скорость (гориз. полёт):"))
@@ -331,7 +376,7 @@ class MissionAnalysisWidget(QWidget):
         self.cog_layout.labelForField(self.cog_fwd_label.parent()).setText(tr("Центровка в горизонтальном полёте:"))
 
         self.power_group.setTitle(tr("Энерговооружённость"))
-        self.hover_thrust_row_label.setText(tr("Вертикальная тяга (Q_HOVER_TRUST):"))
+        self.hover_thrust_row_label.setText(tr("Вертикальная тяга (Q_M_THST_HOVER):"))
 
         self.efficiency_group.setTitle(tr("Эффективность"))
         self.efficiency_layout.labelForField(self.overall_mah_per_km_label.parent()).setText(tr("Общий расход на километр:"))
@@ -434,6 +479,8 @@ class MissionAnalysisWidget(QWidget):
         self.avg_roll_label.setText(f"{avg_roll:.1f}°")
         self.avg_pitch_label.setText(f"{avg_pitch:.1f}°")
 
+        self._load_radio_stats(log_data)
+
         cam_count, trig_count, avg_photo_time, avg_photo_distance = self._photo_stats(log_data)
         self.cam_count_label.setText(str(cam_count))
         self.trig_count_label.setText(str(trig_count))
@@ -481,6 +528,7 @@ class MissionAnalysisWidget(QWidget):
         self.avg_fwd_air_label.setText(_ms("avg_fwd_air"))
         self.avg_mission_gnd_label.setText(_ms("avg_mission_gnd"))
         self.avg_mission_air_label.setText(_ms("avg_mission_air"))
+        self._check_gnd_speed_warning(log_data)
 
         # CG from PIDP.I
         pidp_table = log_data.messages.get("PIDP")
@@ -502,15 +550,40 @@ class MissionAnalysisWidget(QWidget):
         self._update_cog_display()
 
         param_map = {p["name"]: p["value"] for p in log_data.parameters()}
-        q_hover = param_map.get("Q_HOVER_TRUST")
+        q_hover = param_map.get("Q_M_THST_HOVER")
         if q_hover is not None:
-            self.hover_thrust_label.setText(f"{float(q_hover):.3f}")
+            val = float(q_hover)
+            self.hover_thrust_label.setText(f"{val:.3f}")
+            self._update_hover_thrust_dot(val)
         else:
             self.hover_thrust_label.setText("—")
+            self.hover_thrust_dot.setStyleSheet("background-color: gray; border-radius: 6px;")
 
         vert_motors = self._vertical_motor_series(log_data) or None
         fwd_motor = self._forward_motor_series(log_data)
         self.battery_widget.load(log_data, vert_motors=vert_motors, fwd_motor=fwd_motor)
+
+    def set_hover_thrust_thresholds(self, green: float, red: float) -> None:
+        self._hover_thrust_green = green
+        self._hover_thrust_red = red
+        try:
+            val = float(self.hover_thrust_label.text())
+            self._update_hover_thrust_dot(val)
+        except ValueError:
+            pass
+
+    def _update_hover_thrust_dot(self, val: float) -> None:
+        if val <= self._hover_thrust_green:
+            color = "#3cb44b"
+        elif val >= self._hover_thrust_red:
+            color = "#e6194b"
+        else:
+            t = (val - self._hover_thrust_green) / max(self._hover_thrust_red - self._hover_thrust_green, 1e-9)
+            r = int(60 + t * (230 - 60))
+            g = int(180 - t * (180 - 25))
+            b = int(75 - t * (75 - 25))
+            color = f"#{r:02x}{g:02x}{b:02x}"
+        self.hover_thrust_dot.setStyleSheet(f"background-color: {color}; border-radius: 6px;")
 
     def set_cog_thresholds(self, neutral_min: float, neutral_max: float,
                            front_red: float, rear_red: float) -> None:
@@ -778,6 +851,76 @@ class MissionAnalysisWidget(QWidget):
 
         return result
 
+    @staticmethod
+    def _max_sustained(t: np.ndarray, v: np.ndarray, duration: float = 2.0) -> float:
+        """Max value from v that was sustained continuously for ≥ duration seconds."""
+        n = len(t)
+        if n == 0:
+            return 0.0
+        best = 0.0
+        for i in range(n):
+            j = int(np.searchsorted(t, t[i] + duration))
+            if j < n:
+                window_min = float(np.min(v[i:j + 1]))
+                if window_min > best:
+                    best = window_min
+        return best
+
+    def _check_gnd_speed_warning(self, log_data: LogData) -> None:
+        """Show red ! next to max ground speed if it exceeds airspeed+wind (sustained 2s)."""
+        start_t, end_t = self._mission_bounds(log_data)
+        fwd = self._forward_motor_series(log_data)
+        if fwd is None:
+            self.max_fwd_gnd_warn.setVisible(False)
+            return
+
+        fwd_t, fwd_pwm = fwd
+
+        # Ground speed sustained 2s
+        gnd_sus = None
+        for msg_type, spd_field in (("GPS", "Spd"), ("GPS", "GSpd")):
+            table = log_data.messages.get(msg_type)
+            if table and spd_field in table:
+                gt = np.asarray(table["timestamp"], dtype=float)
+                gv = np.asarray(table[spd_field], dtype=float)
+                mask = (gt >= start_t) & (gt <= end_t)
+                pwm_at = np.interp(gt, fwd_t, fwd_pwm)
+                fmask = mask & (pwm_at > _RUNNING_PWM)
+                if fmask.any():
+                    gnd_sus = self._max_sustained(gt[fmask], gv[fmask])
+                break
+
+        # Airspeed sustained 2s
+        air_sus = None
+        for msg_type, air_field in (("ARSPD", "Airspeed"), ("ARSP", "Airspeed")):
+            table = log_data.messages.get(msg_type)
+            if table and air_field in table:
+                at = np.asarray(table["timestamp"], dtype=float)
+                av = np.asarray(table[air_field], dtype=float)
+                mask = (at >= start_t) & (at <= end_t)
+                pwm_at = np.interp(at, fwd_t, fwd_pwm)
+                fmask = mask & (pwm_at > _RUNNING_PWM)
+                if fmask.any():
+                    air_sus = self._max_sustained(at[fmask], av[fmask])
+                break
+
+        # Wind speed sustained 2s
+        wind_sus = None
+        wind = self._wind_series(log_data)
+        if wind is not None:
+            wt, vwn, vwe = wind
+            wt = np.asarray(wt, dtype=float)
+            wspd = np.hypot(np.asarray(vwn, dtype=float), np.asarray(vwe, dtype=float))
+            mask = (wt >= start_t) & (wt <= end_t)
+            if mask.any():
+                wind_sus = self._max_sustained(wt[mask], wspd[mask])
+
+        if gnd_sus is not None and air_sus is not None and wind_sus is not None:
+            show = gnd_sus > air_sus + wind_sus
+        else:
+            show = False
+        self.max_fwd_gnd_warn.setVisible(show)
+
     def _speed_stats(self, log_data: LogData, duration_s: float) -> dict:
         """Ground + airspeed stats: max/avg during forward motor, avg over whole mission."""
         # Ground speed source
@@ -922,6 +1065,39 @@ class MissionAnalysisWidget(QWidget):
                 lon = np.interp(t, gtable["timestamp"], glon)
                 return t, lat, lon
         return None
+
+    def _load_radio_stats(self, log_data: LogData) -> None:
+        labels = (
+            self.radio_snr_local_avg_label, self.radio_snr_remote_avg_label,
+            self.radio_rssi_min_label, self.radio_noise_max_label,
+        )
+        for lbl in labels:
+            lbl.setText("—")
+
+        rad = log_data.messages.get("RAD") or log_data.messages.get("RADIO")
+        if not rad:
+            return
+        rssi_f    = "RSSI"    if "RSSI"    in rad else "rssi"
+        noise_f   = "Noise"   if "Noise"   in rad else "noise"
+        remrssi_f = "RemRSSI" if "RemRSSI" in rad else "remrssi"
+        remnoise_f= "RemNoise"if "RemNoise"in rad else "remnoise"
+        if not all(f in rad for f in (rssi_f, noise_f, remrssi_f, remnoise_f)):
+            return
+
+        rssi     = np.asarray(rad[rssi_f],     dtype=float)
+        noise    = np.asarray(rad[noise_f],    dtype=float)
+        remrssi  = np.asarray(rad[remrssi_f],  dtype=float)
+        remnoise = np.asarray(rad[remnoise_f], dtype=float)
+        if not len(rssi):
+            return
+
+        snr_local  = rssi   - noise
+        snr_remote = remrssi - remnoise
+
+        self.radio_snr_local_avg_label.setText(f"{float(snr_local.mean()):.1f}")
+        self.radio_snr_remote_avg_label.setText(f"{float(snr_remote.mean()):.1f}")
+        self.radio_rssi_min_label.setText(f"{float(rssi.min()):.0f}")
+        self.radio_noise_max_label.setText(f"{float(noise.max()):.0f}")
 
     def _photo_stats(self, log_data: LogData) -> tuple[int, int, float | None, float | None]:
         """Return (CAM count, TRIG count, avg seconds between photos, avg meters
