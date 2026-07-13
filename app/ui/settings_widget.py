@@ -52,6 +52,7 @@ class SettingsWidget(QWidget):
     callout_style_changed = Signal(str)
     callout_fields_changed = Signal(bool, bool, bool)
     snr_range_changed = Signal(float, float)
+    jpeg_quality_changed = Signal(object)  # int | None ("keep")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,6 +200,22 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(self.callout_group)
         self._load_callout_settings()
+
+        # ── Geotagging ───────────────────────────────────────────────────────
+        self.geotag_group = QGroupBox()
+        geotag_layout = QFormLayout(self.geotag_group)
+        self.jpeg_quality_combo = QComboBox()
+        self.jpeg_quality_combo.addItem("", None)
+        self.jpeg_quality_combo.addItem("95", 95)
+        self.jpeg_quality_combo.addItem("85", 85)
+        self.jpeg_quality_combo.addItem("75", 75)
+        self.jpeg_quality_combo.addItem("65", 65)
+        self.jpeg_quality_combo.setCurrentIndex(0)
+        self.jpeg_quality_combo.currentIndexChanged.connect(self._on_jpeg_quality_changed)
+        self.jpeg_quality_label = QLabel()
+        geotag_layout.addRow(self.jpeg_quality_label, self.jpeg_quality_combo)
+        layout.addWidget(self.geotag_group)
+        self._load_jpeg_quality()
 
         layout = right_layout
 
@@ -508,6 +525,10 @@ class SettingsWidget(QWidget):
         self.snr_min_label.setText(tr("Минимальный SNR:"))
         self.snr_max_label.setText(tr("Максимальный SNR:"))
 
+        self.geotag_group.setTitle(tr("Геотегирование"))
+        self.jpeg_quality_label.setText(tr("Качество JPEG:"))
+        self.jpeg_quality_combo.setItemText(0, tr("Без изменения (рекомендуется)"))
+
         self.info_lipo_title.setText("LiPo / Li-ion:")
         self.info_lipo_full.setText(tr("  • Заряжен: 4.20В/ячейку"))
         self.info_lihv_title.setText("LiHV:")
@@ -790,6 +811,37 @@ class SettingsWidget(QWidget):
             self.callout_speed_cb.isChecked(),
             self.callout_dist_cb.isChecked(),
         )
+
+    def _on_jpeg_quality_changed(self, index: int):
+        quality = self.jpeg_quality_combo.itemData(index)
+        self._save_setting("jpeg_quality", quality)
+        self.jpeg_quality_changed.emit(quality)
+
+    def get_jpeg_quality(self):
+        return self.jpeg_quality_combo.currentData()
+
+    def _load_jpeg_quality(self):
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            quality = data.get("jpeg_quality", None)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        idx = self.jpeg_quality_combo.findData(quality)
+        if idx >= 0:
+            self.jpeg_quality_combo.blockSignals(True)
+            self.jpeg_quality_combo.setCurrentIndex(idx)
+            self.jpeg_quality_combo.blockSignals(False)
+
+    def _save_setting(self, key: str, value):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data[key] = value
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
     def showEvent(self, event):
         super().showEvent(event)

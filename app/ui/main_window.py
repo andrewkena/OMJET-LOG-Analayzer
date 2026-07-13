@@ -167,6 +167,8 @@ class MainWindow(QMainWindow):
         style, show_t, show_s, show_d = self.settings_widget.get_callout_settings()
         self.map_widget.set_callout_style(style)
         self.map_widget.set_callout_fields(show_t, show_s, show_d)
+        self.settings_widget.jpeg_quality_changed.connect(self.photo_geotag_widget.set_jpeg_quality)
+        self.photo_geotag_widget.set_jpeg_quality(self.settings_widget.get_jpeg_quality())
         self.settings_widget.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.settings_widget.current_theme())
         self.settings_widget.timezone_changed.connect(self._on_timezone_changed)

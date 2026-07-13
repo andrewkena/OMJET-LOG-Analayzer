@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image
 from PIL.ExifTags import IFD
 from PIL.TiffImagePlugin import IFDRational
-from PySide6.QtCore import Qt, QUrl, QSize, QRect, Signal, QObject, Slot
+from PySide6.QtCore import Qt, QUrl, QSize, QRect, Signal, QObject, Slot, QThread
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPalette
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
@@ -78,8 +78,9 @@ def _decimal_to_dms_rational(value: float):
     return (IFDRational(degrees, 1), IFDRational(minutes, 1), IFDRational(seconds, 1000))
 
 
-def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None):
-    """Write GPS coordinates into a photo's EXIF GPS IFD, preserving image data."""
+def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None, jpeg_quality=None):
+    """Write GPS coordinates into a photo's EXIF GPS IFD, preserving image data.
+    jpeg_quality: None = keep original quality, int = re-encode at given quality (1-95)."""
     data = path.read_bytes()
     img = Image.open(io.BytesIO(data))
     img.load()
@@ -97,7 +98,7 @@ def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None):
 
     save_kwargs = {"exif": exif}
     if fmt == "JPEG":
-        save_kwargs["quality"] = "keep"
+        save_kwargs["quality"] = jpeg_quality if isinstance(jpeg_quality, int) else "keep"
     img.save(path, format=fmt, **save_kwargs)
     img.close()
 
@@ -313,6 +314,94 @@ def _thumbnail_icon(path: Path, size: int, has_gps: bool, excluded: bool = False
         painter.drawRect(canvas.rect())
     painter.end()
     return QIcon(canvas)
+
+
+def _thumbnail_icon_from_bytes(thumb_bytes: bytes, has_gps: bool, excluded: bool, size: int = 96) -> QIcon:
+    """Build thumbnail icon from pre-loaded JPEG bytes (fast path, no file I/O)."""
+    pixmap = QPixmap()
+    if thumb_bytes:
+        pixmap.loadFromData(thumb_bytes)
+        pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if pixmap.isNull():
+        pixmap = QPixmap(size, size)
+        pixmap.fill(QColor("#333333"))
+
+    if not has_gps and not excluded:
+        return QIcon(pixmap)
+
+    canvas = QPixmap(pixmap.size())
+    canvas.fill(Qt.transparent)
+    painter = QPainter(canvas)
+    painter.drawPixmap(0, 0, pixmap)
+    if has_gps:
+        badge_size = max(18, size // 4)
+        badge_rect = QRect(canvas.width() - badge_size - 2, 2, badge_size, badge_size)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))
+        painter.drawEllipse(badge_rect)
+        painter.setFont(QFont("Segoe UI Emoji", int(badge_size * 0.55)))
+        painter.setPen(QColor("#ffd54f"))
+        painter.drawText(badge_rect, Qt.AlignCenter, "🌐❗")
+    if excluded:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(60, 60, 60, 160))
+        painter.drawRect(canvas.rect())
+    painter.end()
+    return QIcon(canvas)
+
+
+class _PhotoLoader(QThread):
+    """Background thread: reads GPS EXIF and generates thumbnails using PIL.
+    Opens each file once — much faster than QPixmap for large folders."""
+    photo_ready = Signal(int, object, bytes)  # row, gps_tuple|None, jpeg_bytes
+
+    def __init__(self, files: list[Path], thumb_size: int = 96, parent=None):
+        super().__init__(parent)
+        self._files = files
+        self._thumb_size = thumb_size
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        for row, path in enumerate(self._files):
+            if self._stop:
+                break
+            gps, thumb_bytes = self._load_one(path)
+            self.photo_ready.emit(row, gps, thumb_bytes)
+
+    def _load_one(self, path: Path):
+        gps = None
+        thumb_bytes = b''
+        try:
+            img = Image.open(path)
+            try:
+                gps_ifd = img.getexif().get_ifd(IFD.GPSInfo)
+                if gps_ifd and 2 in gps_ifd and 4 in gps_ifd:
+                    def _dms(dms, ref):
+                        d, m, s = dms
+                        v = float(d) + float(m) / 60 + float(s) / 3600
+                        return -v if ref in ("S", "W") else v
+                    lat = _dms(gps_ifd[2], gps_ifd.get(1, "N"))
+                    lon = _dms(gps_ifd[4], gps_ifd.get(3, "E"))
+                    alt = None
+                    if 6 in gps_ifd:
+                        alt = float(gps_ifd[6])
+                        if gps_ifd.get(5) == 1:
+                            alt = -alt
+                    gps = (lat, lon, alt)
+            except Exception:
+                pass
+            img.thumbnail((self._thumb_size, self._thumb_size), Image.LANCZOS)
+            if img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'JPEG', quality=75)
+            thumb_bytes = buf.getvalue()
+        except Exception:
+            pass
+        return gps, thumb_bytes
 
 
 class _PhotoMapBridge(QObject):
@@ -878,7 +967,9 @@ class _PhotoFolderPanel(QWidget):
         self.folder_path: Path | None = None
         self.photo_files: list[Path] = []
         self._photo_gps: list[tuple | None] = []
+        self._photo_thumbs: list[bytes] = []
         self._excluded: set[int] = set()
+        self._loader: _PhotoLoader | None = None
 
         self.choose_button = QPushButton()
         self.choose_button.clicked.connect(self._on_choose_clicked)
@@ -887,10 +978,14 @@ class _PhotoFolderPanel(QWidget):
         self.geotag_button.clicked.connect(self.geotag_requested.emit)
         self.remove_geotags_button = QPushButton()
         self.remove_geotags_button.clicked.connect(self._on_remove_all_geotags_clicked)
+        self.clear_photos_button = QPushButton()
+        self.clear_photos_button.clicked.connect(self._on_clear_photos_clicked)
+        self.clear_photos_button.setEnabled(False)
         self.count_label = QLabel("")
 
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
+        self.loading_label = QLabel("")
 
         self.view_combo = QComboBox()
         self.view_combo.currentIndexChanged.connect(self._on_view_mode_changed)
@@ -909,6 +1004,7 @@ class _PhotoFolderPanel(QWidget):
         header_row.addWidget(self.remove_geotags_button)
 
         footer_row = QHBoxLayout()
+        footer_row.addWidget(self.clear_photos_button)
         footer_row.addStretch()
         footer_row.addWidget(self.geotag_source_combo)
         footer_row.addWidget(self.geotag_button)
@@ -917,18 +1013,20 @@ class _PhotoFolderPanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addLayout(header_row)
         layout.addWidget(self.path_label)
+        layout.addWidget(self.loading_label)
         layout.addWidget(self.file_list)
         layout.addLayout(footer_row)
 
         i18n.register(self._retranslateUi)
         self._retranslateUi()
-        self.view_combo.setCurrentIndex(1)  # default to thumbnails
+        self.view_combo.setCurrentIndex(0)  # default to list
 
     def _retranslateUi(self):
         tr = i18n.tr
         self.choose_button.setText(tr("Выбрать папку с фотографиями..."))
         self.geotag_button.setText(tr("Геотегировать изображения"))
         self.remove_geotags_button.setText(tr("Удалить все геопривязки"))
+        self.clear_photos_button.setText(tr("Очистить фотографии"))
         if not self.photo_files:
             self.path_label.setText(tr("Папка не выбрана"))
         current_idx = self.view_combo.currentIndex()
@@ -956,35 +1054,73 @@ class _PhotoFolderPanel(QWidget):
             return
         self.set_folder(directory)
 
+    def _on_clear_photos_clicked(self):
+        self._stop_loader()
+        self.loading_label.setText("")
+        self.folder_path = None
+        self.photo_files = []
+        self._photo_gps = []
+        self._photo_thumbs = []
+        self._excluded = set()
+        self.file_list.clear()
+        self.path_label.setText(i18n.tr("Папка не выбрана"))
+        self.count_label.setText("")
+        self.clear_photos_button.setEnabled(False)
+        self.folder_loaded.emit([])
+
     def set_folder(self, directory: str):
+        self._stop_loader()
         folder = Path(directory)
         files = sorted(p for p in folder.iterdir() if p.suffix.lower() in _PHOTO_EXTENSIONS)
         self.folder_path = folder
         self.photo_files = files
         self._excluded = set()
-
-        tr = i18n.tr
-        progress = QProgressDialog(tr("Загрузка фотографий..."), tr("Отмена"), 0, len(files), self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-
-        gps = []
-        for i, f in enumerate(files):
-            if progress.wasCanceled():
-                gps.extend([None] * (len(files) - len(gps)))
-                break
-            progress.setLabelText(tr("Чтение: ") + f.name)
-            progress.setValue(i)
-            QApplication.processEvents()
-            gps.append(_read_gps_exif(f))
-        progress.setValue(len(files))
-        self._photo_gps = gps
+        self._photo_gps = [None] * len(files)
+        self._photo_thumbs = [b''] * len(files)
 
         self.path_label.setText(str(folder))
         self._update_count_label()
         self._populate_list()
-
+        self.clear_photos_button.setEnabled(True)
         self.folder_loaded.emit(files)
+
+        if files:
+            n = len(files)
+            self.loading_label.setText(f"Загрузка: 0 / {n}")
+            self._loader = _PhotoLoader(files, parent=self)
+            self._loader.photo_ready.connect(self._on_photo_ready)
+            self._loader.finished.connect(self._on_loader_finished)
+            self._loader.start()
+
+    def _stop_loader(self):
+        if self._loader is not None:
+            self._loader.stop()
+            self._loader.wait(2000)
+            self._loader = None
+
+    def _on_photo_ready(self, row: int, gps, thumb_bytes: bytes):
+        if row >= len(self.photo_files):
+            return
+        self._photo_gps[row] = gps
+        self._photo_thumbs[row] = thumb_bytes
+        item = self.file_list.item(row)
+        if item is not None:
+            excluded = row in self._excluded
+            if self.view_combo.currentIndex() == 1:
+                item.setIcon(_thumbnail_icon_from_bytes(thumb_bytes, gps is not None, excluded, size=96))
+            if gps:
+                lat, lon, alt = gps
+                alt_text = f"{alt:.1f} м" if alt is not None else "—"
+                item.setToolTip(
+                    f"{self.photo_files[row].name}\nШирота: {lat:.6f}\nДолгота: {lon:.6f}\nВысота: {alt_text}"
+                )
+        loaded = sum(1 for t in self._photo_thumbs if t)
+        self.loading_label.setText(f"Загрузка: {loaded} / {len(self.photo_files)}")
+
+    def _on_loader_finished(self):
+        self._loader = None
+        self.loading_label.setText("")
+        self._update_count_label()
 
     def _on_remove_all_geotags_clicked(self):
         tr = i18n.tr
@@ -1079,11 +1215,14 @@ class _PhotoFolderPanel(QWidget):
         item = self.file_list.item(row)
         if item is None:
             return
-        f = self.photo_files[row]
         excluded = row in self._excluded
-        has_gps = self._photo_gps[row] is not None
+        has_gps = self._photo_gps[row] is not None if row < len(self._photo_gps) else False
         if self.view_combo.currentIndex() == 1:
-            item.setIcon(_thumbnail_icon(f, 96, has_gps, excluded))
+            thumb = self._photo_thumbs[row] if row < len(self._photo_thumbs) else b''
+            if thumb:
+                item.setIcon(_thumbnail_icon_from_bytes(thumb, has_gps, excluded))
+            else:
+                item.setIcon(_thumbnail_icon(self.photo_files[row], 96, has_gps, excluded))
         default_fg = self.file_list.palette().color(QPalette.Text)
         item.setForeground(QColor("#888888") if excluded else default_fg)
 
@@ -1097,17 +1236,20 @@ class _PhotoFolderPanel(QWidget):
             self.file_list.setSpacing(6)
             self.file_list.setWordWrap(True)
             self.file_list.setFlow(QListView.LeftToRight)
+            placeholder = QPixmap(96, 96)
+            placeholder.fill(QColor("#333333"))
+            placeholder_icon = QIcon(placeholder)
             for row, f in enumerate(self.photo_files):
-                gps = self._photo_gps[row]
+                gps = self._photo_gps[row] if row < len(self._photo_gps) else None
                 excluded = row in self._excluded
-                item = QListWidgetItem(_thumbnail_icon(f, 96, gps is not None, excluded), f.name)
+                thumb = self._photo_thumbs[row] if row < len(self._photo_thumbs) else b''
+                icon = _thumbnail_icon_from_bytes(thumb, gps is not None, excluded) if thumb else placeholder_icon
+                item = QListWidgetItem(icon, f.name)
                 item.setTextAlignment(Qt.AlignHCenter)
                 if gps:
                     lat, lon, alt = gps
                     alt_text = f"{alt:.1f} м" if alt is not None else "—"
-                    item.setToolTip(
-                        f"{f.name}\nШирота: {lat:.6f}\nДолгота: {lon:.6f}\nВысота: {alt_text}"
-                    )
+                    item.setToolTip(f"{f.name}\nШирота: {lat:.6f}\nДолгота: {lon:.6f}\nВысота: {alt_text}")
                 else:
                     item.setToolTip(f.name)
                 if excluded:
@@ -1117,6 +1259,7 @@ class _PhotoFolderPanel(QWidget):
             self.file_list.setViewMode(QListView.ListMode)
             self.file_list.setFlow(QListView.TopToBottom)
             self.file_list.setGridSize(QSize())
+            self.file_list.setIconSize(QSize())
             self.file_list.setSpacing(0)
             for row, f in enumerate(self.photo_files):
                 item = QListWidgetItem(f.name)
@@ -1227,8 +1370,12 @@ class PhotoGeotagWidget(QWidget):
         self._gnss_outliers: list[bool] = []
         self._gnss_excluded: set[int] = set()
         self._highlighted_row = -1
+        self._jpeg_quality = None  # None = keep original
         i18n.register(self._retranslateUi)
         self._retranslateUi()
+
+    def set_jpeg_quality(self, quality):
+        self._jpeg_quality = quality
 
     def _retranslateUi(self):
         tr = i18n.tr
@@ -1670,7 +1817,7 @@ class PhotoGeotagWidget(QWidget):
             QApplication.processEvents()
             p = points[i]
             try:
-                _write_gps_exif(f, p["lat"], p["lon"], p.get("alt"))
+                _write_gps_exif(f, p["lat"], p["lon"], p.get("alt"), self._jpeg_quality)
             except Exception as e:
                 errors.append(f"{f.name}: {e}")
         progress.setValue(n)

@@ -129,6 +129,7 @@ _EN: dict[str, str] = {
     "Геометки с лога": "Log Geotags",
     "Геотегировать изображения": "Geotag Images",
     "Удалить все геопривязки": "Remove All Geotags",
+    "Очистить фотографии": "Clear Photos",
     "Папка не выбрана": "No folder selected",
     "Список": "List",
     "Миниатюры": "Thumbnails",
