@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QPainter, QColor, QPen
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QPushButton, QFrame
 
 from app.core import i18n
 from app.core.time_format import format_mmss
@@ -57,6 +57,72 @@ class _WindHighlightSample(QWidget):
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.drawLine(4, y, w - 4, y)
+
+        p.end()
+
+
+import math as _math
+
+class _WindArrowWidget(QWidget):
+    """Compass-style arrow showing current wind direction (where wind comes FROM)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(52, 52)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._direction = None  # degrees meteorological (where wind blows FROM)
+
+    def set_direction(self, deg: float | None):
+        self._direction = deg
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
+        r = min(w, h) / 2 - 2
+
+        # Circle background
+        p.setPen(QPen(QColor(255, 255, 255, 140), 2))
+        p.setBrush(QColor(0, 0, 0, 100))
+        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+
+        if self._direction is not None:
+            # Arrow points INTO wind (where it comes from). 0°=N, clockwise.
+            angle_rad = _math.radians(self._direction)
+            # Arrow tip (into wind)
+            tip_x = cx + r * 0.72 * _math.sin(angle_rad)
+            tip_y = cy - r * 0.72 * _math.cos(angle_rad)
+            # Arrow tail
+            tail_x = cx - r * 0.50 * _math.sin(angle_rad)
+            tail_y = cy + r * 0.50 * _math.cos(angle_rad)
+            # Arrowhead wings
+            wing_r = r * 0.32
+            left_x = tip_x + wing_r * _math.sin(angle_rad - _math.pi * 0.75)
+            left_y = tip_y - wing_r * _math.cos(angle_rad - _math.pi * 0.75)
+            right_x = tip_x + wing_r * _math.sin(angle_rad + _math.pi * 0.75)
+            right_y = tip_y - wing_r * _math.cos(angle_rad + _math.pi * 0.75)
+
+            from PySide6.QtGui import QPolygonF
+            from PySide6.QtCore import QPointF
+            pen = QPen(QColor(255, 255, 255, 240), 3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawLine(int(tail_x), int(tail_y), int(tip_x), int(tip_y))
+            head = QPolygonF([
+                QPointF(tip_x, tip_y),
+                QPointF(left_x, left_y),
+                QPointF(right_x, right_y),
+            ])
+            p.setBrush(QColor(255, 255, 255, 240))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(head)
+        else:
+            # No data — draw a small dash
+            p.setPen(QPen(QColor(255, 255, 255, 140), 3))
+            p.drawLine(int(cx - 8), int(cy), int(cx + 8), int(cy))
 
         p.end()
 
@@ -741,6 +807,29 @@ class MapWidget(QWidget):
         wind_value_row.addStretch()
         wind_panel_layout.addWidget(self._wind_title_label)
         wind_panel_layout.addLayout(wind_value_row)
+
+        # Separator + "Текущий ветер" header
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: rgba(255,255,255,80);")
+        wind_panel_layout.addWidget(sep)
+        self._wind_current_title = QLabel()
+        self._wind_current_title.setStyleSheet("color: white; font-weight: bold;")
+        wind_panel_layout.addWidget(self._wind_current_title)
+
+        # Current wind: arrow + speed centered in panel
+        self._wind_arrow = _WindArrowWidget()
+        self._wind_current_label = QLabel("—")
+        self._wind_current_label.setStyleSheet("color: white;")
+        self._wind_current_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wind_current_center = QHBoxLayout()
+        wind_current_center.setSpacing(8)
+        wind_current_center.addStretch()
+        wind_current_center.addWidget(self._wind_arrow)
+        wind_current_center.addWidget(self._wind_current_label)
+        wind_current_center.addStretch()
+        wind_panel_layout.addLayout(wind_current_center)
+
         self.wind_panel.adjustSize()
         self.wind_panel.setVisible(self.show_wind_checkbox.isChecked())
 
@@ -758,6 +847,7 @@ class MapWidget(QWidget):
         self._mode_colors: dict[str, str] = {}
         self._wind_t = np.array([])
         self._wind_speed = np.array([])
+        self._wind_dir = np.array([])
         self._gnd_speed_t = np.array([])
         self._gnd_speed_v = np.array([])
         self._airspeed_t = np.array([])
@@ -786,6 +876,7 @@ class MapWidget(QWidget):
         for ru_text, label in self._error_legend_labels:
             label.setText(tr(ru_text))
         self._wind_title_label.setText(tr("Допустимый ветер"))
+        self._wind_current_title.setText(tr("Текущий ветер"))
         self.photo_count_help_label.setToolTip(
             f"<span style='color:#ffeb3b;'>&#9632;</span> &mdash; "
             f"{tr('количество отправленных фотоимпульсов в камеру')}<br>"
@@ -883,6 +974,15 @@ class MapWidget(QWidget):
 
     def set_wind_speed_data(self, t: np.ndarray, speed: np.ndarray):
         self._wind_t, self._wind_speed = t, speed
+        self._wind_dir = np.array([])
+        self._wind_arrow.set_direction(None)
+        self._wind_current_label.setText("—")
+        self._update_wind_highlight()
+
+    def set_wind_data(self, t: np.ndarray, speed: np.ndarray, direction: np.ndarray):
+        self._wind_t, self._wind_speed, self._wind_dir = t, speed, direction
+        self._wind_arrow.set_direction(None)
+        self._wind_current_label.setText("—")
         self._update_wind_highlight()
 
     def set_wind_panel_visible(self, visible: bool):
@@ -1089,6 +1189,18 @@ class MapWidget(QWidget):
             f"setCursor({self._lat[idx]}, {self._lon[idx]}, '{label}', "
             f"{heading_arg}, {speed_arg}, {dist_arg}, {airspeed_arg});"
         )
+
+        # Update wind arrow + current speed label
+        if len(self._wind_t) > 0:
+            widx = int(np.searchsorted(self._wind_t, t))
+            widx = max(0, min(widx, len(self._wind_t) - 1))
+            w_speed = float(self._wind_speed[widx])
+            self._wind_current_label.setText(f"{w_speed:.1f} м/с")
+            if len(self._wind_dir) == len(self._wind_speed):
+                w_dir = float(self._wind_dir[widx])
+                self._wind_arrow.set_direction(w_dir)
+            else:
+                self._wind_arrow.set_direction(None)
 
     def highlight_range(self, t0: float, t1: float):
         if len(self._t) == 0:

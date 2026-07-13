@@ -453,6 +453,15 @@ class SettingsWidget(QWidget):
 
         layout.addWidget(self.snr_group)
 
+        # ── Update check ────────────────────────────────────────────────────
+        update_group = QGroupBox()
+        update_layout = QVBoxLayout(update_group)
+        self._check_update_btn = QPushButton()
+        self._check_update_btn.clicked.connect(self._on_check_update)
+        update_layout.addWidget(self._check_update_btn)
+        self.update_group = update_group
+        right_layout.addWidget(self.update_group)
+
         left_layout.addStretch()
         right_layout.addStretch()
 
@@ -525,6 +534,9 @@ class SettingsWidget(QWidget):
         self.callout_time_cb.setText(tr("Время"))
         self.callout_speed_cb.setText(tr("Скорость"))
         self.callout_dist_cb.setText(tr("Расстояние"))
+
+        self.update_group.setTitle(tr("Обновления"))
+        self._check_update_btn.setText(tr("Проверить обновления"))
 
     @staticmethod
     def _make_dot(color: str) -> QLabel:
@@ -666,6 +678,63 @@ class SettingsWidget(QWidget):
 
     def get_cog_thresholds(self) -> tuple[float, float, float, float]:
         return self._cog_neutral_min, self._cog_neutral_max, self._cog_front_red, self._cog_rear_red
+
+    def _on_check_update(self):
+        from app.core.update_checker import UpdateChecker, _parse_version
+        from app.core.version import APP_VERSION
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        self._check_update_btn.setEnabled(False)
+        self._check_update_btn.setText(i18n.tr("Проверка..."))
+
+        self._upd_checker = UpdateChecker(self)
+
+        def on_update(tag: str, url: str):
+            box = QMessageBox(self)
+            box.setWindowTitle(i18n.tr("Доступно обновление"))
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(
+                f"<b>{i18n.tr('Доступна новая версия')}: {tag}</b><br>"
+                f"{i18n.tr('Текущая версия')}: {APP_VERSION}"
+            )
+            box.setInformativeText(i18n.tr("Перейти на страницу загрузки?"))
+            open_btn = box.addButton(i18n.tr("Перейти на GitHub"), QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(i18n.tr("Закрыть"), QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is open_btn:
+                QDesktopServices.openUrl(QUrl(url))
+
+        def on_done():
+            self._check_update_btn.setEnabled(True)
+            self._retranslateUi()
+            if not self._upd_checker.receivers(self._upd_checker.update_available):
+                # No update signal was emitted → already up to date
+                pass
+
+        def on_no_update():
+            QMessageBox.information(
+                self,
+                i18n.tr("Обновления"),
+                f"{i18n.tr('У вас установлена последняя версия')}: {APP_VERSION}",
+            )
+
+        # Track whether update was found
+        self._upd_found = False
+
+        def on_update_tracked(tag: str, url: str):
+            self._upd_found = True
+            on_update(tag, url)
+
+        def on_done_tracked():
+            self._check_update_btn.setEnabled(True)
+            self._retranslateUi()
+            if not self._upd_found:
+                on_no_update()
+
+        self._upd_checker.update_available.connect(on_update_tracked)
+        self._upd_checker.check_done.connect(on_done_tracked)
+        self._upd_checker.start()
 
     def _on_snr_range_changed(self):
         snr_min = self.snr_min_spin.value()

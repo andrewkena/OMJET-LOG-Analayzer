@@ -8,7 +8,7 @@ import math
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout, QLabel, QPushButton, QMessageBox,
 )
 
 from app.core import i18n
@@ -166,7 +166,23 @@ class MissionAnalysisWidget(QWidget):
         self.wind_dir_label = QLabel("—")
         self.wind_layout.addRow(" ", self.avg_wind_label)
         self.wind_layout.addRow(" ", self.max_wind_label)
-        self.wind_layout.addRow(" ", self.wind_dir_label)
+
+        wind_dir_row = QHBoxLayout()
+        wind_dir_row.setSpacing(4)
+        wind_dir_row.addWidget(self.wind_dir_label)
+        self._wind_dir_help_btn = QPushButton("?")
+        self._wind_dir_help_btn.setFixedSize(18, 18)
+        self._wind_dir_help_btn.setStyleSheet(
+            "QPushButton { border-radius: 9px; border: 1px solid palette(mid); font-size: 10px; }"
+            "QPushButton:hover { background: palette(highlight); color: white; }"
+        )
+        self._wind_dir_help_btn.setToolTip("Справка по классификации направления ветра")
+        self._wind_dir_help_btn.clicked.connect(self._show_wind_dir_help)
+        wind_dir_row.addWidget(self._wind_dir_help_btn)
+        wind_dir_row.addStretch()
+        self._wind_dir_widget = QWidget()
+        self._wind_dir_widget.setLayout(wind_dir_row)
+        self.wind_layout.addRow(" ", self._wind_dir_widget)
 
         self.attitude_group = QGroupBox()
         self.attitude_layout = QFormLayout(self.attitude_group)
@@ -188,6 +204,30 @@ class MissionAnalysisWidget(QWidget):
         self.radio_layout.addRow(" ", self.radio_snr_remote_avg_label)
         self.radio_layout.addRow(" ", self.radio_rssi_min_label)
         self.radio_layout.addRow(" ", self.radio_noise_max_label)
+
+        # Wrapper: custom title row with "?" + groupbox below (no groupbox title)
+        self._snr_help_btn = QPushButton("?")
+        self._snr_help_btn.setFixedSize(18, 18)
+        self._snr_help_btn.setStyleSheet(
+            "QPushButton { border-radius: 9px; border: 1px solid palette(mid); font-size: 10px; }"
+            "QPushButton:hover { background: palette(highlight); color: white; }"
+        )
+        self._snr_help_btn.setToolTip("Справка по методике расчёта SNR")
+        self._snr_help_btn.clicked.connect(self._show_snr_help)
+        self._radio_title_label = QLabel()
+        self._radio_title_label.setStyleSheet("font-weight: bold;")
+        radio_title_row = QHBoxLayout()
+        radio_title_row.setContentsMargins(2, 0, 2, 0)
+        radio_title_row.setSpacing(4)
+        radio_title_row.addWidget(self._radio_title_label)
+        radio_title_row.addWidget(self._snr_help_btn)
+        radio_title_row.addStretch()
+        self._radio_outer = QWidget()
+        radio_outer_layout = QVBoxLayout(self._radio_outer)
+        radio_outer_layout.setContentsMargins(0, 0, 0, 0)
+        radio_outer_layout.setSpacing(2)
+        radio_outer_layout.addLayout(radio_title_row)
+        radio_outer_layout.addWidget(self.radio_group)
 
         self.photo_group = QGroupBox()
         self.photo_layout = QFormLayout(self.photo_group)
@@ -270,9 +310,18 @@ class MissionAnalysisWidget(QWidget):
         self.hover_thrust_dot.setStyleSheet("background-color: gray; border-radius: 6px;")
         self._hover_thrust_green = 0.5
         self._hover_thrust_red = 1.0
+        self._hover_thrust_help_btn = QPushButton("?")
+        self._hover_thrust_help_btn.setFixedSize(18, 18)
+        self._hover_thrust_help_btn.setStyleSheet(
+            "QPushButton { border-radius: 9px; border: 1px solid palette(mid); font-size: 10px; }"
+            "QPushButton:hover { background: palette(highlight); color: white; }"
+        )
+        self._hover_thrust_help_btn.setToolTip("Справка по параметру Q_M_THST_HOVER")
+        self._hover_thrust_help_btn.clicked.connect(self._show_hover_thrust_help)
         hover_thrust_value_row = QHBoxLayout()
         hover_thrust_value_row.addWidget(self.hover_thrust_dot)
         hover_thrust_value_row.addWidget(self.hover_thrust_label)
+        hover_thrust_value_row.addWidget(self._hover_thrust_help_btn)
         hover_thrust_value_row.addStretch()
         self.hover_thrust_row_label = QLabel()
         self.power_layout.addRow(self.hover_thrust_row_label, hover_thrust_value_row)
@@ -296,7 +345,7 @@ class MissionAnalysisWidget(QWidget):
         mid_column = QVBoxLayout()
         mid_column.addWidget(self.attitude_group)
         mid_column.addWidget(self.wind_group)
-        mid_column.addWidget(self.radio_group)
+        mid_column.addWidget(self._radio_outer)
         mid_column.addWidget(self.photo_group)
         mid_column.addStretch()
 
@@ -335,7 +384,7 @@ class MissionAnalysisWidget(QWidget):
         self.wind_group.setTitle(tr("Ветер"))
         self.wind_layout.labelForField(self.avg_wind_label).setText(tr("Средний ветер:"))
         self.wind_layout.labelForField(self.max_wind_label).setText(tr("Максимальный ветер:"))
-        self.wind_layout.labelForField(self.wind_dir_label).setText(tr("Преобладающее направление ветра:"))
+        self.wind_layout.labelForField(self._wind_dir_widget).setText(tr("Преобладающее направление ветра:"))
 
         self.attitude_group.setTitle(tr("Углы"))
         self.attitude_layout.labelForField(self.max_roll_label).setText(tr("Максимальный крен:"))
@@ -343,7 +392,7 @@ class MissionAnalysisWidget(QWidget):
         self.attitude_layout.labelForField(self.avg_roll_label).setText(tr("Средний крен:"))
         self.attitude_layout.labelForField(self.avg_pitch_label).setText(tr("Средний тангаж:"))
 
-        self.radio_group.setTitle(tr("Качество радиосвязи"))
+        self._radio_title_label.setText(tr("Качество радиосвязи"))
         self.radio_layout.labelForField(self.radio_snr_local_avg_label).setText(tr("Средний SNR на борту:"))
         self.radio_layout.labelForField(self.radio_snr_remote_avg_label).setText(tr("Средний SNR на земле:"))
         self.radio_layout.labelForField(self.radio_rssi_min_label).setText(tr("Минимальный RSSI:"))
@@ -982,6 +1031,59 @@ class MissionAnalysisWidget(QWidget):
             if table and north_f in table and east_f in table:
                 return table["timestamp"], table[north_f], table[east_f]
         return None
+
+    def _show_snr_help(self):
+        QMessageBox.information(
+            self, "Методика расчёта SNR",
+            "<b>SNR (Signal-to-Noise Ratio)</b> — отношение сигнала к шуму.<br><br>"
+            "<b>Формулы:</b><br>"
+            "&nbsp;&nbsp;SNR_local&nbsp; = RSSI − Noise<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;(самолёт слышит землю)<br><br>"
+            "&nbsp;&nbsp;SNR_remote = RemRSSI − RemNoise<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;(земля слышит самолёт)<br><br>"
+            "<b>Источник данных:</b> сообщения <code>RADIO</code> в лог-файле ArduPilot.<br><br>"
+            "<b>Ориентировочные значения SNR:</b><br>"
+            "<table cellspacing='4'>"
+            "<tr><th align='left'>SNR</th><th align='left'>Качество</th></tr>"
+            "<tr><td>&gt; 100</td><td>Отличное — надёжная связь</td></tr>"
+            "<tr><td>60–100</td><td>Хорошее</td></tr>"
+            "<tr><td>30–60</td><td>Удовлетворительное</td></tr>"
+            "<tr><td>10–30</td><td>Слабое, возможны потери пакетов</td></tr>"
+            "<tr><td>&lt; 10</td><td>Критическое, связь нестабильна</td></tr>"
+            "</table>",
+        )
+
+    def _show_hover_thrust_help(self):
+        QMessageBox.information(
+            self,
+            "Q_M_THST_HOVER — тяга висения VTOL",
+            "Q_M_THST_HOVER — доля газа (0.0–1.0), при которой VTOL-моторы\n"
+            "удерживают аппарат в висении без снижения и набора высоты.\n\n"
+            "Диапазон:    0.1 … 0.9\n"
+            "По умолчанию: 0.35 (35% газа)\n\n"
+            "Регулятор высоты использует это значение как рабочую точку,\n"
+            "вокруг которой строит поправки. Неправильное значение приводит\n"
+            "к постоянному смещению газа вверх или вниз при переходе в висение.\n\n"
+            "Автообучение: при Q_M_THST_HOVER_LEARN = 1 ArduPilot уточняет\n"
+            "значение в полёте и сохраняет автоматически.\n\n"
+            "Аналог для чистых коптеров — MOT_THST_HOVER.",
+        )
+
+    def _show_wind_dir_help(self):
+        QMessageBox.information(
+            self,
+            "Классификация направления ветра",
+            "Тип ветра определяется по углу между направлением ветра и курсом ВС:\n\n"
+            "  Встречный (headwind)   — угол  0° … 45°\n"
+            "  Боковой   (crosswind)  — угол  45° … 135°\n"
+            "  Попутный  (tailwind)   — угол  135° … 180°\n\n"
+            "Угол = |направление_ветра − курс_ВС|, нормализован к 0°…180°.\n\n"
+            "Компоненты:\n"
+            "  Встречная =  V × cos(угол)   > 0 — встречный, < 0 — попутный\n"
+            "  Боковая   =  V × sin(угол)   абсолютное значение\n\n"
+            "Отображается преобладающий тип — тот, в секторе которого ВС\n"
+            "провёл наибольшее суммарное время за полёт.",
+        )
 
     def _wind_stats(self, log_data: LogData) -> tuple[float | None, float | None]:
         wind = self._wind_series(log_data)

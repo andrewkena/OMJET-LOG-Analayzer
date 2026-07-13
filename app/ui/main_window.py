@@ -39,6 +39,7 @@ from app.ui.link_quality_widget import LinkQualityWidget
 from app.ui.theme import apply_dark_theme, apply_light_theme, apply_system_theme
 from app.core.time_format import set_utc_offset_hours, format_mmss
 from app.core.event_decoder import decode_event, decode_error
+from app.core.update_checker import UpdateChecker
 
 GPS_LAT_CANDIDATES = [("GPS", "Lat", "Lng"), ("GPS", "Lat", "Lon"), ("GLOBAL_POSITION_INT", "lat", "lon")]
 ALT_CANDIDATES = [("BARO", "Alt"), ("CTUN", "Alt"), ("GPS", "Alt"), ("GLOBAL_POSITION_INT", "relative_alt")]
@@ -181,6 +182,31 @@ class MainWindow(QMainWindow):
         if self._tile_handler is not None:
             self._tile_handler.cache_limit_exceeded.connect(self._on_cache_limit_exceeded)
             self.settings_widget.set_tile_handler(self._tile_handler)
+
+        # Start update check after window is shown (2 s delay to avoid slowing startup)
+        QTimer.singleShot(2000, self._start_update_check)
+
+    def _start_update_check(self):
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.start()
+
+    def _on_update_available(self, remote_tag: str, url: str):
+        from app.core.version import APP_VERSION
+        box = QMessageBox(self)
+        box.setWindowTitle("Доступно обновление")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"<b>Доступна новая версия: {remote_tag}</b><br>"
+            f"Текущая версия: {APP_VERSION}"
+        )
+        box.setInformativeText("Перейти на страницу загрузки?")
+        open_btn = box.addButton("Перейти на GitHub", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Позже", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(url))
 
     def _on_cache_limit_exceeded(self):
         tr = i18n.tr
@@ -851,7 +877,7 @@ class MainWindow(QMainWindow):
                 direction = (np.degrees(np.arctan2(vwe, vwn)) + 180.0) % 360.0
                 speed = np.hypot(vwn, vwe)
                 self.attitude_panel.set_wind_data(table["timestamp"], direction, speed)
-                self.map_widget.set_wind_speed_data(table["timestamp"], speed)
+                self.map_widget.set_wind_data(table["timestamp"], speed, direction)
                 break
         else:
             self.attitude_panel.clear_wind_data()

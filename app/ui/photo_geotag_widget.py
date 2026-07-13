@@ -82,8 +82,12 @@ def _decimal_to_dms_rational(value: float):
 _DRONE_DJI_NS = "http://www.dji.com/drone-dji/1.0/"
 
 
-def _build_drone_dji_xmp(existing_xmp: bytes, lat: float, lon: float, alt: float | None) -> bytes:
-    """Create or update drone-dji XMP block with GPS coordinates and altitude."""
+def _build_drone_dji_xmp(
+    existing_xmp: bytes,
+    lat: float, lon: float, alt: float | None,
+    roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
+) -> bytes:
+    """Create or update drone-dji XMP block with GPS coordinates, altitude and attitude."""
     import xml.etree.ElementTree as ET
 
     sign = lambda v: ("+" if v >= 0 else "-")
@@ -94,6 +98,13 @@ def _build_drone_dji_xmp(existing_xmp: bytes, lat: float, lon: float, alt: float
     if alt is not None:
         fields["AbsoluteAltitude"] = f"{sign(alt)}{abs(alt):.2f}"
         fields["RelativeAltitude"] = f"{sign(alt)}{abs(alt):.2f}"
+
+    r = roll if roll is not None else 0.0
+    p = pitch if pitch is not None else 0.0
+    y = yaw if yaw is not None else 0.0
+    fields["FlightRollDegree"] = f"{sign(r)}{abs(r):.2f}"
+    fields["FlightPitchDegree"] = f"{sign(p)}{abs(p):.2f}"
+    fields["FlightYawDegree"] = f"{sign(y)}{abs(y):.2f}"
 
     # Try to update existing XMP
     if existing_xmp:
@@ -142,7 +153,10 @@ def _wrap_xmp_packet(inner: str) -> bytes:
     ).encode("utf-8")
 
 
-def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None, jpeg_quality=None):
+def _write_gps_exif(
+    path: Path, lat: float, lon: float, alt: float | None, jpeg_quality=None,
+    roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
+):
     """Write GPS coordinates into a photo's EXIF GPS IFD and drone-dji XMP block.
     jpeg_quality: None = keep original quality, int = re-encode at given quality (1-95)."""
     data = path.read_bytes()
@@ -164,7 +178,7 @@ def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None, jpeg_
     if fmt == "JPEG":
         save_kwargs["quality"] = jpeg_quality if isinstance(jpeg_quality, int) else "keep"
         existing_xmp = img.info.get("xmp", b"")
-        save_kwargs["xmp"] = _build_drone_dji_xmp(existing_xmp, lat, lon, alt)
+        save_kwargs["xmp"] = _build_drone_dji_xmp(existing_xmp, lat, lon, alt, roll, pitch, yaw)
     img.save(path, format=fmt, **save_kwargs)
     img.close()
 
@@ -1576,7 +1590,14 @@ class PhotoGeotagWidget(QWidget):
         self._rows = rows
         self._points = list(zip(lat.tolist(), lon.tolist()))
         self._log_geotags = [
-            {"lat": float(lat[i]), "lon": float(lon[i]), "alt": float(amsl[i]) if amsl is not None else None}
+            {
+                "lat": float(lat[i]),
+                "lon": float(lon[i]),
+                "alt": float(amsl[i]) if amsl is not None else None,
+                "roll": float(roll[i]) if roll is not None else None,
+                "pitch": float(pitch[i]) if pitch is not None else None,
+                "yaw": float(yaw[i]) if yaw is not None else None,
+            }
             for i in range(n)
         ]
         self.table.setRowCount(n)
@@ -1930,7 +1951,11 @@ class PhotoGeotagWidget(QWidget):
             try:
                 dest = out_dir / f.name
                 shutil.copy2(f, dest)
-                _write_gps_exif(dest, p["lat"], p["lon"], p.get("alt"), self.photo_folder_panel._jpeg_quality)
+                _write_gps_exif(
+                    dest, p["lat"], p["lon"], p.get("alt"),
+                    self.photo_folder_panel._jpeg_quality,
+                    p.get("roll"), p.get("pitch"), p.get("yaw"),
+                )
             except Exception as e:
                 errors.append(f"{f.name}: {e}")
         progress.setValue(n)
