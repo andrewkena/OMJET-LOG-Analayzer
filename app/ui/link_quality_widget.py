@@ -18,7 +18,7 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QSpinBox, QSlider, QCheckBox,
+    QSpinBox, QDoubleSpinBox, QSlider, QCheckBox, QPushButton, QMessageBox,
 )
 
 from app.ui.time_axis import TimeAxisItem
@@ -175,13 +175,15 @@ class _LQBridge(QObject):
 
 
 class LinkQualityWidget(QWidget):
+    snr_range_changed = Signal(float, float)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self._max_weight = 30
         self._opacity = 0.9
         self._snr_min = 0.0
-        self._snr_max = 150.0
+        self._snr_max = 60.0
         self._cache: dict | None = None
 
         self._source_label = QLabel("Нет данных о качестве связи")
@@ -219,6 +221,33 @@ class LinkQualityWidget(QWidget):
         self._top_widget = QWidget()
         self._top_widget.setLayout(top_row)
 
+        self._snr_min_spin = QDoubleSpinBox()
+        self._snr_min_spin.setRange(-50.0, 200.0)
+        self._snr_min_spin.setDecimals(1)
+        self._snr_min_spin.setSingleStep(1.0)
+        self._snr_min_spin.setValue(self._snr_min)
+        self._snr_min_spin.setFixedWidth(62)
+        self._snr_min_spin.setToolTip("SNR, при котором трек красный (слабый сигнал)")
+        self._snr_min_spin.valueChanged.connect(self._on_local_snr_changed)
+
+        self._snr_max_spin = QDoubleSpinBox()
+        self._snr_max_spin.setRange(-50.0, 200.0)
+        self._snr_max_spin.setDecimals(1)
+        self._snr_max_spin.setSingleStep(1.0)
+        self._snr_max_spin.setValue(self._snr_max)
+        self._snr_max_spin.setFixedWidth(62)
+        self._snr_max_spin.setToolTip("SNR, при котором трек зелёный (сильный сигнал)")
+        self._snr_max_spin.valueChanged.connect(self._on_local_snr_changed)
+
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(22, 22)
+        help_btn.setStyleSheet(
+            "QPushButton { border-radius: 11px; border: 1px solid #888; font-weight: bold; }"
+            "QPushButton:hover { background: #555; }"
+        )
+        help_btn.setToolTip("Методика расчёта SNR")
+        help_btn.clicked.connect(self._show_snr_help)
+
         # Controls row — hidden when fullscreen
         ctrl_row = QHBoxLayout()
         ctrl_row.setContentsMargins(0, 0, 0, 0)
@@ -229,8 +258,12 @@ class LinkQualityWidget(QWidget):
         ctrl_row.addWidget(self._weight_spin)
         ctrl_row.addSpacing(14)
         ctrl_row.addWidget(QLabel("SNR слабый"))
+        ctrl_row.addWidget(self._snr_min_spin)
         ctrl_row.addWidget(legend)
+        ctrl_row.addWidget(self._snr_max_spin)
         ctrl_row.addWidget(QLabel("SNR сильный"))
+        ctrl_row.addSpacing(6)
+        ctrl_row.addWidget(help_btn)
         ctrl_row.addStretch()
 
         self._header_widget = QWidget()
@@ -338,8 +371,51 @@ class LinkQualityWidget(QWidget):
     def set_snr_range(self, snr_min: float, snr_max: float) -> None:
         self._snr_min = snr_min
         self._snr_max = snr_max
+        for spin, val in ((self._snr_min_spin, snr_min), (self._snr_max_spin, snr_max)):
+            spin.blockSignals(True)
+            spin.setValue(val)
+            spin.blockSignals(False)
         if self._cache is not None:
             self._send_segments()
+
+    def _on_local_snr_changed(self):
+        snr_min = self._snr_min_spin.value()
+        snr_max = self._snr_max_spin.value()
+        if snr_max <= snr_min:
+            self._snr_max_spin.blockSignals(True)
+            self._snr_max_spin.setValue(snr_min + 1.0)
+            self._snr_max_spin.blockSignals(False)
+            snr_max = snr_min + 1.0
+        self._snr_min = snr_min
+        self._snr_max = snr_max
+        self.snr_range_changed.emit(snr_min, snr_max)
+        if self._cache is not None:
+            self._send_segments()
+
+    def _show_snr_help(self):
+        QMessageBox.information(
+            self, "Методика расчёта SNR",
+            "<b>SNR (Signal-to-Noise Ratio)</b> — отношение сигнала к шуму.<br><br>"
+            "<b>Формулы:</b><br>"
+            "&nbsp;&nbsp;SNR_local&nbsp; = RSSI − Noise<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;(самолёт слышит землю)<br><br>"
+            "&nbsp;&nbsp;SNR_remote = RemRSSI − RemNoise<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;(земля слышит самолёт)<br><br>"
+            "<b>Источник данных:</b> сообщения <code>RADIO</code> в лог-файле ArduPilot.<br><br>"
+            "<b>Цвет трека:</b><br>"
+            "&nbsp;&nbsp;🔴 Красный — SNR ≤ порог «слабый»<br>"
+            "&nbsp;&nbsp;🟡 Жёлтый — средний SNR<br>"
+            "&nbsp;&nbsp;🟢 Зелёный — SNR ≥ порог «сильный»<br><br>"
+            "<b>Ориентировочные значения SNR:</b><br>"
+            "<table cellspacing='4'>"
+            "<tr><th align='left'>SNR</th><th align='left'>Качество</th></tr>"
+            "<tr><td>&gt; 100</td><td>Отличное — надёжная связь</td></tr>"
+            "<tr><td>60–100</td><td>Хорошее</td></tr>"
+            "<tr><td>30–60</td><td>Удовлетворительное</td></tr>"
+            "<tr><td>10–30</td><td>Слабое, возможны потери пакетов</td></tr>"
+            "<tr><td>&lt; 10</td><td>Критическое, связь нестабильна</td></tr>"
+            "</table>",
+        )
 
     # ── segment building ───────────────────────────────────────────────────
     def _build_segments(self, snr_norm: np.ndarray, rssi_norm: np.ndarray,

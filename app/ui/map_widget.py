@@ -887,6 +887,10 @@ class MapWidget(QWidget):
 
     def set_wind_panel_visible(self, visible: bool):
         self.wind_panel.setVisible(visible)
+        if visible:
+            self._update_wind_highlight()
+        else:
+            self._run_js("setWindHighlight([]);")
 
     def set_max_wind(self, max_wind: float):
         self._max_wind = max_wind

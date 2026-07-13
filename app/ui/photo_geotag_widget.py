@@ -11,13 +11,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from PIL.ExifTags import IFD
 from PIL.TiffImagePlugin import IFDRational
-from PySide6.QtCore import Qt, QUrl, QSize, QRect, Signal, QObject, Slot, QThread
+from PySide6.QtCore import Qt, QUrl, QSize, QRect, Signal, QObject, Slot, QThread, QEvent
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPalette
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QFileDialog, QAbstractItemView, QSplitter, QMessageBox, QCheckBox,
     QListWidget, QListWidgetItem, QListView, QComboBox, QMenu, QDialog, QDialogButtonBox,
-    QApplication, QProgressDialog, QSlider, QSpinBox, QFormLayout,
+    QApplication, QProgressDialog, QSlider, QSpinBox, QFormLayout, QFrame,
 )
 
 from app.core import i18n
@@ -78,8 +79,71 @@ def _decimal_to_dms_rational(value: float):
     return (IFDRational(degrees, 1), IFDRational(minutes, 1), IFDRational(seconds, 1000))
 
 
+_DRONE_DJI_NS = "http://www.dji.com/drone-dji/1.0/"
+
+
+def _build_drone_dji_xmp(existing_xmp: bytes, lat: float, lon: float, alt: float | None) -> bytes:
+    """Create or update drone-dji XMP block with GPS coordinates and altitude."""
+    import xml.etree.ElementTree as ET
+
+    sign = lambda v: ("+" if v >= 0 else "-")
+    fields = {
+        "GpsLatitude": f"{lat:.7f}",
+        "GpsLongtitude": f"{lon:.7f}",  # DJI intentional typo preserved
+    }
+    if alt is not None:
+        fields["AbsoluteAltitude"] = f"{sign(alt)}{abs(alt):.2f}"
+        fields["RelativeAltitude"] = f"{sign(alt)}{abs(alt):.2f}"
+
+    # Try to update existing XMP
+    if existing_xmp:
+        try:
+            xmp_str = existing_xmp.decode("utf-8", errors="replace")
+            start = xmp_str.find("<x:xmpmeta")
+            end = xmp_str.find("</x:xmpmeta>")
+            if start >= 0 and end >= 0:
+                ET.register_namespace("x", "adobe:ns:meta/")
+                ET.register_namespace("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+                ET.register_namespace("drone-dji", _DRONE_DJI_NS)
+                chunk = xmp_str[start:end + len("</x:xmpmeta>")]
+                root = ET.fromstring(chunk)
+                rdf_ns = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+                rdf = root.find(f"{rdf_ns}RDF")
+                if rdf is not None:
+                    desc = rdf.find(f"{rdf_ns}Description")
+                    if desc is None:
+                        desc = ET.SubElement(rdf, f"{rdf_ns}Description")
+                        desc.set(f"{rdf_ns}about", "")
+                    for k, v in fields.items():
+                        desc.set(f"{{{_DRONE_DJI_NS}}}{k}", v)
+                    inner = ET.tostring(root, encoding="unicode")
+                    return _wrap_xmp_packet(inner)
+        except Exception:
+            pass
+
+    # Create fresh minimal XMP
+    attrs = f' xmlns:drone-dji="{_DRONE_DJI_NS}"'
+    for k, v in fields.items():
+        attrs += f' drone-dji:{k}="{v}"'
+    inner = (
+        f'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        f'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        f'<rdf:Description rdf:about=""{attrs}/>'
+        f'</rdf:RDF></x:xmpmeta>'
+    )
+    return _wrap_xmp_packet(inner)
+
+
+def _wrap_xmp_packet(inner: str) -> bytes:
+    return (
+        '<?xpacket begin="\xef\xbb\xbf" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+        + inner
+        + '<?xpacket end="w"?>'
+    ).encode("utf-8")
+
+
 def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None, jpeg_quality=None):
-    """Write GPS coordinates into a photo's EXIF GPS IFD, preserving image data.
+    """Write GPS coordinates into a photo's EXIF GPS IFD and drone-dji XMP block.
     jpeg_quality: None = keep original quality, int = re-encode at given quality (1-95)."""
     data = path.read_bytes()
     img = Image.open(io.BytesIO(data))
@@ -99,6 +163,8 @@ def _write_gps_exif(path: Path, lat: float, lon: float, alt: float | None, jpeg_
     save_kwargs = {"exif": exif}
     if fmt == "JPEG":
         save_kwargs["quality"] = jpeg_quality if isinstance(jpeg_quality, int) else "keep"
+        existing_xmp = img.info.get("xmp", b"")
+        save_kwargs["xmp"] = _build_drone_dji_xmp(existing_xmp, lat, lon, alt)
     img.save(path, format=fmt, **save_kwargs)
     img.close()
 
@@ -976,12 +1042,22 @@ class _PhotoFolderPanel(QWidget):
         self.geotag_source_combo = QComboBox()
         self.geotag_button = QPushButton()
         self.geotag_button.clicked.connect(self.geotag_requested.emit)
+        _bold = self.geotag_button.font()
+        _bold.setBold(True)
+        self.geotag_button.setFont(_bold)
         self.remove_geotags_button = QPushButton()
         self.remove_geotags_button.clicked.connect(self._on_remove_all_geotags_clicked)
         self.clear_photos_button = QPushButton()
         self.clear_photos_button.clicked.connect(self._on_clear_photos_clicked)
         self.clear_photos_button.setEnabled(False)
         self.count_label = QLabel("")
+
+        self.jpeg_quality_label = QLabel()
+        self.jpeg_quality_combo = QComboBox()
+        self.jpeg_quality_combo.addItem("Без изменения", None)
+        for q in (95, 85, 75, 65):
+            self.jpeg_quality_combo.addItem(str(q), q)
+        self.jpeg_quality_combo.currentIndexChanged.connect(self._on_jpeg_quality_changed)
 
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
@@ -995,6 +1071,7 @@ class _PhotoFolderPanel(QWidget):
         self.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self._on_photo_context_menu)
         self.file_list.itemDoubleClicked.connect(self._on_photo_double_clicked)
+        self.file_list.viewport().installEventFilter(self)
 
         header_row = QHBoxLayout()
         header_row.addWidget(self.choose_button)
@@ -1003,9 +1080,16 @@ class _PhotoFolderPanel(QWidget):
         header_row.addWidget(self.count_label)
         header_row.addWidget(self.remove_geotags_button)
 
+        _sep = QFrame()
+        _sep.setFrameShape(QFrame.VLine)
+        _sep.setFrameShadow(QFrame.Sunken)
+
         footer_row = QHBoxLayout()
         footer_row.addWidget(self.clear_photos_button)
         footer_row.addStretch()
+        footer_row.addWidget(self.jpeg_quality_label)
+        footer_row.addWidget(self.jpeg_quality_combo)
+        footer_row.addWidget(_sep)
         footer_row.addWidget(self.geotag_source_combo)
         footer_row.addWidget(self.geotag_button)
 
@@ -1017,6 +1101,7 @@ class _PhotoFolderPanel(QWidget):
         layout.addWidget(self.file_list)
         layout.addLayout(footer_row)
 
+        self._jpeg_quality = None  # None = keep original
         i18n.register(self._retranslateUi)
         self._retranslateUi()
         self.view_combo.setCurrentIndex(0)  # default to list
@@ -1027,6 +1112,12 @@ class _PhotoFolderPanel(QWidget):
         self.geotag_button.setText(tr("Геотегировать изображения"))
         self.remove_geotags_button.setText(tr("Удалить все геопривязки"))
         self.clear_photos_button.setText(tr("Очистить фотографии"))
+        self.jpeg_quality_label.setText(tr("Качество JPEG:"))
+        cur_q = self.jpeg_quality_combo.currentIndex()
+        self.jpeg_quality_combo.blockSignals(True)
+        self.jpeg_quality_combo.setItemText(0, tr("Без изменения"))
+        self.jpeg_quality_combo.setCurrentIndex(cur_q)
+        self.jpeg_quality_combo.blockSignals(False)
         if not self.photo_files:
             self.path_label.setText(tr("Папка не выбрана"))
         current_idx = self.view_combo.currentIndex()
@@ -1053,6 +1144,20 @@ class _PhotoFolderPanel(QWidget):
         if not directory:
             return
         self.set_folder(directory)
+
+    def eventFilter(self, obj, event):
+        if obj is self.file_list.viewport() and event.type() == QEvent.Type.Resize:
+            if self.view_combo.currentIndex() == 0:
+                self._update_list_grid_size()
+        return super().eventFilter(obj, event)
+
+    def _update_list_grid_size(self):
+        vp_w = self.file_list.viewport().width()
+        col_w = max(40, vp_w // 5)
+        self.file_list.setGridSize(QSize(col_w, 20))
+
+    def _on_jpeg_quality_changed(self, _index: int):
+        self._jpeg_quality = self.jpeg_quality_combo.currentData()
 
     def _on_clear_photos_clicked(self):
         self._stop_loader()
@@ -1258,9 +1363,12 @@ class _PhotoFolderPanel(QWidget):
         else:
             self.file_list.setViewMode(QListView.ListMode)
             self.file_list.setFlow(QListView.TopToBottom)
-            self.file_list.setGridSize(QSize())
+            self.file_list.setWrapping(True)
+            self.file_list.setResizeMode(QListView.Fixed)
+            self.file_list.setUniformItemSizes(True)
             self.file_list.setIconSize(QSize())
             self.file_list.setSpacing(0)
+            self._update_list_grid_size()
             for row, f in enumerate(self.photo_files):
                 item = QListWidgetItem(f.name)
                 if row in self._excluded:
@@ -1803,6 +1911,9 @@ class PhotoGeotagWidget(QWidget):
         if preview.exec() != QDialog.Accepted:
             return
 
+        out_dir = files[0].parent / "geotagged"
+        out_dir.mkdir(exist_ok=True)
+
         progress = QProgressDialog(tr("Геотегирование") + "...", tr("Отмена"), 0, n, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
@@ -1817,7 +1928,9 @@ class PhotoGeotagWidget(QWidget):
             QApplication.processEvents()
             p = points[i]
             try:
-                _write_gps_exif(f, p["lat"], p["lon"], p.get("alt"), self._jpeg_quality)
+                dest = out_dir / f.name
+                shutil.copy2(f, dest)
+                _write_gps_exif(dest, p["lat"], p["lon"], p.get("alt"), self.photo_folder_panel._jpeg_quality)
             except Exception as e:
                 errors.append(f"{f.name}: {e}")
         progress.setValue(n)
@@ -1825,10 +1938,14 @@ class PhotoGeotagWidget(QWidget):
         if errors:
             QMessageBox.warning(
                 self, tr("Геотегирование завершено с ошибками"),
-                f"Обработано: {n - len(errors)} из {n}.\n" + "\n".join(errors[:10])
+                f"Обработано: {n - len(errors)} из {n}.\n"
+                f"Папка: {out_dir}\n" + "\n".join(errors[:10])
             )
         else:
-            QMessageBox.information(self, tr("Геотегирование завершено"), f"Координаты записаны в {n} фотографий.")
+            QMessageBox.information(
+                self, tr("Геотегирование завершено"),
+                f"Координаты записаны в {n} фотографий.\nПапка: {out_dir}"
+            )
 
     def _export_csv(self):
         if not self._rows:

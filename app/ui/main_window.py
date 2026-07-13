@@ -161,14 +161,13 @@ class MainWindow(QMainWindow):
         self.settings_widget.cog_thresholds_changed.connect(self.mission_analysis_widget.set_cog_thresholds)
         self.mission_analysis_widget.set_cog_thresholds(*self.settings_widget.get_cog_thresholds())
         self.settings_widget.snr_range_changed.connect(self.link_quality_widget.set_snr_range)
+        self.link_quality_widget.snr_range_changed.connect(self.settings_widget.set_snr_range)
         self.link_quality_widget.set_snr_range(*self.settings_widget.get_snr_range())
         self.settings_widget.callout_style_changed.connect(self.map_widget.set_callout_style)
         self.settings_widget.callout_fields_changed.connect(self.map_widget.set_callout_fields)
         style, show_t, show_s, show_d = self.settings_widget.get_callout_settings()
         self.map_widget.set_callout_style(style)
         self.map_widget.set_callout_fields(show_t, show_s, show_d)
-        self.settings_widget.jpeg_quality_changed.connect(self.photo_geotag_widget.set_jpeg_quality)
-        self.photo_geotag_widget.set_jpeg_quality(self.settings_widget.get_jpeg_quality())
         self.settings_widget.theme_changed.connect(self._on_theme_changed)
         self._on_theme_changed(self.settings_widget.current_theme())
         self.settings_widget.timezone_changed.connect(self._on_timezone_changed)
@@ -239,6 +238,7 @@ class MainWindow(QMainWindow):
         graph_splitter = QSplitter(Qt.Vertical)
         self.graph_labels: list[QLabel] = []
         self.graph_clear_btns: list[QPushButton] = []
+        self.graph_save_btns: list[QPushButton] = []
         for i, graph in enumerate(self.graphs):
             wrapper = QWidget()
             wrapper_layout = QVBoxLayout(wrapper)
@@ -250,6 +250,12 @@ class MainWindow(QMainWindow):
             self.graph_labels.append(lbl)
             header_row.addWidget(lbl)
             header_row.addStretch()
+            save_btn = QPushButton("💾")
+            save_btn.setFixedWidth(32)
+            save_btn.setToolTip("Сохранить график как изображение")
+            save_btn.clicked.connect(lambda _=False, idx=i: self._save_graph_image(idx))
+            self.graph_save_btns.append(save_btn)
+            header_row.addWidget(save_btn)
             clear_btn = QPushButton()
             clear_btn.setFixedWidth(110)
             clear_btn.clicked.connect(lambda _=False, idx=i: self._clear_graph(idx))
@@ -944,6 +950,20 @@ class MainWindow(QMainWindow):
             vehicle_type = "Неизвестен"
         self.attitude_panel.set_vehicle_type(vehicle_type)
         self.map_widget.set_vehicle_type(vehicle_type)
+
+    def _save_graph_image(self, graph_idx: int):
+        from PySide6.QtGui import QPixmap
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Сохранить график {graph_idx + 1}",
+            f"graph_{graph_idx + 1}.png",
+            "PNG изображение (*.png);;JPEG (*.jpg *.jpeg);;Все файлы (*)",
+        )
+        if not path:
+            return
+        graph = self.graphs[graph_idx]
+        pixmap = graph.grab()
+        if not pixmap.save(path):
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить файл:\n{path}")
 
     def _clear_graph(self, graph_idx: int):
         keys = [k for k, v in list(self._field_graph_assignment.items()) if v == graph_idx]
