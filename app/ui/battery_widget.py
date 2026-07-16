@@ -115,7 +115,8 @@ class BatteryWidget(QWidget):
 
         mah = None
         if "CurrTot" in sub and len(sub["CurrTot"]):
-            mah = float(sub["CurrTot"][-1])
+            # CurrTot is cumulative since power-on — use delta to get this-flight consumption
+            mah = float(sub["CurrTot"][-1]) - float(sub["CurrTot"][0])
         elif "Curr" in sub and len(sub["Curr"]) > 1:
             t = sub["timestamp"]
             curr = sub["Curr"]

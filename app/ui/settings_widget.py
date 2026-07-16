@@ -233,8 +233,7 @@ class SettingsWidget(QWidget):
 
         battery_outer.addLayout(battery_layout)
 
-        # Right: voltage info
-        info_layout = QVBoxLayout()
+        # Right: voltage info in two columns
         self.info_lipo_title = QLabel()
         self.info_lipo_full = QLabel()
         self.info_lihv_title = QLabel()
@@ -242,11 +241,27 @@ class SettingsWidget(QWidget):
         self.info_liuhv_title = QLabel()
         self.info_liuhv_full = QLabel()
         self.info_volt_min = QLabel()
+
+        info_col1 = QVBoxLayout()
+        info_col1.setSpacing(0)
+        info_col1.setContentsMargins(0, 0, 0, 0)
         for lbl in (self.info_lipo_title, self.info_lipo_full,
-                    self.info_lihv_title, self.info_lihv_full,
-                    self.info_liuhv_title, self.info_liuhv_full,
+                    self.info_lihv_title, self.info_lihv_full):
+            info_col1.addWidget(lbl)
+        info_col1.addStretch()
+
+        info_col2 = QVBoxLayout()
+        info_col2.setSpacing(0)
+        info_col2.setContentsMargins(0, 0, 0, 0)
+        for lbl in (self.info_liuhv_title, self.info_liuhv_full,
                     self.info_volt_min):
-            info_layout.addWidget(lbl)
+            info_col2.addWidget(lbl)
+        info_col2.addStretch()
+
+        info_layout = QHBoxLayout()
+        info_layout.setSpacing(16)
+        info_layout.addLayout(info_col1)
+        info_layout.addLayout(info_col2)
         info_layout.addStretch()
         battery_outer.addLayout(info_layout)
         self._load_battery_chemistry()

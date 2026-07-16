@@ -946,9 +946,12 @@ class MapWidget(QWidget):
     def set_time_origin(self, t0: float):
         self._t0 = t0
 
-    def set_track(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray):
+    def set_track(self, t: np.ndarray, lat: np.ndarray, lon: np.ndarray,
+                  cum_dist: np.ndarray | None = None):
         self._t, self._lat, self._lon = t, lat, lon
-        if len(lat) >= 2:
+        if cum_dist is not None and len(cum_dist) == len(t):
+            self._cum_dist = cum_dist
+        elif len(lat) >= 2:
             lat_r = np.radians(lat)
             lon_r = np.radians(lon)
             dlat = np.diff(lat_r)

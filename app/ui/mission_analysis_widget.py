@@ -56,6 +56,24 @@ def _haversine_distance_m(lat: np.ndarray, lon: np.ndarray) -> float:
     return float(np.sum(seg))
 
 
+def _speed_distance_m(t: np.ndarray, spd: np.ndarray) -> float:
+    """Integrate ground speed over time — matches GNSS receiver odometer."""
+    if len(t) < 2:
+        return 0.0
+    dt = np.diff(t)
+    return float(np.sum(spd[:-1] * dt))
+
+
+def _speed_distance_while_running_m(t: np.ndarray, spd: np.ndarray,
+                                     motor_t: np.ndarray, motor_pwm: np.ndarray) -> float:
+    if len(t) < 2:
+        return 0.0
+    dt = np.diff(t)
+    pwm_at = np.interp(t[:-1], motor_t, motor_pwm)
+    running = pwm_at > _RUNNING_PWM
+    return float(np.sum(spd[:-1] * dt * running))
+
+
 def _max_range_from_start_m(lat: np.ndarray, lon: np.ndarray) -> float:
     """Max haversine distance from the first point to any subsequent point."""
     if len(lat) < 2:
@@ -501,7 +519,7 @@ class MissionAnalysisWidget(QWidget):
         _hm = f"{_h} ч {_m:02d} мин" if _h > 0 else f"{_m} мин"
         self.duration_label.setText(f"{format_mmss(_dur_s)} ({_hm})")
 
-        self.distance_label.setText(f"{self._distance_m(log_data):.0f} м")
+        self.distance_label.setText(f"{self._distance_m(log_data, start_t=start_t, end_t=end_t):.0f} м")
 
         max_range = self._max_range_m(log_data)
         if max_range >= 1000:
@@ -539,7 +557,8 @@ class MissionAnalysisWidget(QWidget):
         )
 
         overall_per_km, overall_per_min, fwd_per_km, fwd_per_min = self._efficiency_stats(
-            log_data, duration, self._distance_m(log_data)
+            log_data, duration, self._distance_m(log_data, start_t=start_t, end_t=end_t),
+            start_t=start_t, end_t=end_t
         )
         self.overall_mah_per_km_label.setText(f"{overall_per_km:.0f} мА·ч/км" if overall_per_km is not None else "—")
         self.overall_mah_per_min_label.setText(f"{overall_per_min:.0f} мА·ч/мин" if overall_per_min is not None else "—")
@@ -683,32 +702,110 @@ class MissionAnalysisWidget(QWidget):
                 )
 
     def _mission_bounds(self, log_data: LogData) -> tuple[float, float]:
-        ev_table = log_data.messages.get("EV")
-        if ev_table and "Id" in ev_table:
-            ids = ev_table["Id"]
-            times = ev_table["timestamp"]
-            arm_times = times[ids == _ARM_EVENT_ID]
-            disarm_times = times[ids == _DISARM_EVENT_ID]
-            if len(arm_times):
-                start_t = float(arm_times[0])
-                later_disarms = disarm_times[disarm_times >= start_t]
-                end_t = float(later_disarms[-1]) if len(later_disarms) else float(log_data.end_time)
-                return start_t, end_t
-        return float(log_data.start_time), float(log_data.end_time)
+        start_t = end_t = None
 
-    def _distance_m(self, log_data: LogData, motor: tuple[np.ndarray, np.ndarray] | None = None) -> float:
+        # --- ARM time ---
+        # 1. ARM message with ArmState=1
+        arm_msg = log_data.messages.get("ARM")
+        if arm_msg and "ArmState" in arm_msg:
+            arm_rows = arm_msg["timestamp"][arm_msg["ArmState"].astype(int) == 1]
+            if len(arm_rows):
+                start_t = float(arm_rows[0])
+
+        # 2. EV Id=10
+        if start_t is None:
+            ev = log_data.messages.get("EV")
+            if ev and "Id" in ev:
+                arm_times = ev["timestamp"][ev["Id"] == _ARM_EVENT_ID]
+                if len(arm_times):
+                    start_t = float(arm_times[0])
+
+        # 3. STAT.Armed rising edge (0→1)
+        if start_t is None:
+            stat = log_data.messages.get("STAT")
+            if stat and "Armed" in stat:
+                armed = stat["Armed"].astype(int)
+                rises = np.where(np.diff(armed) > 0)[0]
+                if len(rises):
+                    start_t = float(stat["timestamp"][rises[0] + 1])
+                elif armed[0]:
+                    # Already armed at log start
+                    start_t = float(stat["timestamp"][0])
+
+        # --- DISARM time ---
+        # 1. ARM message with ArmState=0 (disarm)
+        if arm_msg and "ArmState" in arm_msg:
+            disarm_rows = arm_msg["timestamp"][arm_msg["ArmState"].astype(int) == 0]
+            if len(disarm_rows):
+                later = disarm_rows[disarm_rows >= (start_t or 0)]
+                if len(later):
+                    end_t = float(later[-1])
+
+        # 2. EV Id=11
+        if end_t is None:
+            ev = log_data.messages.get("EV")
+            if ev and "Id" in ev:
+                disarm_times = ev["timestamp"][ev["Id"] == _DISARM_EVENT_ID]
+                later = disarm_times[disarm_times >= (start_t or 0)]
+                if len(later):
+                    end_t = float(later[-1])
+
+        # 3. STAT.Armed falling edge (1→0)
+        if end_t is None:
+            stat = log_data.messages.get("STAT")
+            if stat and "Armed" in stat:
+                armed = stat["Armed"].astype(int)
+                falls = np.where(np.diff(armed) < 0)[0]
+                if len(falls):
+                    t_fall = float(stat["timestamp"][falls[-1] + 1])
+                    if start_t is None or t_fall >= start_t:
+                        end_t = t_fall
+
+        if start_t is None:
+            start_t = float(log_data.start_time)
+        if end_t is None:
+            end_t = float(log_data.end_time)
+
+        return start_t, end_t
+
+    def _distance_m(self, log_data: LogData, motor: tuple[np.ndarray, np.ndarray] | None = None,
+                    start_t: float | None = None, end_t: float | None = None) -> float:
+        # Prefer speed integration (matches GNSS receiver odometer, immune to position noise).
+        # Fall back to Haversine if Spd field unavailable.
+        gps_table = log_data.messages.get("GPS")
+        if gps_table is not None and "Spd" in gps_table:
+            t = gps_table["timestamp"]
+            spd = gps_table["Spd"]
+            mask = np.ones(len(t), dtype=bool)
+            if start_t is not None:
+                mask &= t >= start_t
+            if end_t is not None:
+                mask &= t <= end_t
+            t, spd = t[mask], spd[mask]
+            if motor is None:
+                return _speed_distance_m(t, spd)
+            motor_t, motor_pwm = motor
+            return _speed_distance_while_running_m(t, spd, motor_t, motor_pwm)
+
         for msg_type, lat_f, lon_f in _GPS_LAT_CANDIDATES:
             table = log_data.messages.get(msg_type)
             if table and lat_f in table and lon_f in table:
+                t = table["timestamp"]
                 lat = table[lat_f]
                 lon = table[lon_f]
                 if msg_type == "GLOBAL_POSITION_INT":
                     lat = lat / 1e7
                     lon = lon / 1e7
+                mask = np.ones(len(t), dtype=bool)
+                if start_t is not None:
+                    mask &= t >= start_t
+                if end_t is not None:
+                    mask &= t <= end_t
+                lat, lon, t = lat[mask], lon[mask], t[mask]
                 if motor is None:
                     return _haversine_distance_m(lat, lon)
                 motor_t, motor_pwm = motor
-                return _distance_while_running_m(lat, lon, table["timestamp"], motor_t, motor_pwm)
+                return _distance_while_running_m(lat, lon, t, motor_t, motor_pwm)
         return 0.0
 
     def _max_range_m(self, log_data: LogData) -> float:
@@ -777,12 +874,9 @@ class MissionAnalysisWidget(QWidget):
                 result.append((rcou_table["timestamp"], rcou_table[field]))
         return result
 
-    def _battery_mah(self, log_data: LogData, motor: tuple[np.ndarray, np.ndarray] | None = None) -> float:
-        """Total mA*h consumed across both battery instances. When `motor` is
-        given (RCOU timestamp/pwm of the forward motor), only counts mA*h
-        accrued while that motor is running; otherwise uses the logged
-        cumulative CurrTot when available, falling back to integrating Curr.
-        """
+    def _battery_mah(self, log_data: LogData, motor: tuple[np.ndarray, np.ndarray] | None = None,
+                     start_t: float | None = None, end_t: float | None = None) -> float:
+        """Total mA*h consumed across both battery instances in the ARM-DISARM window."""
         bat_table = log_data.messages.get("BAT")
         bat2_table = log_data.messages.get("BAT2")
         total = 0.0
@@ -792,20 +886,32 @@ class MissionAnalysisWidget(QWidget):
                 continue
             t = sub["timestamp"]
             curr = sub["Curr"]
+            # Filter to ARM-DISARM window
+            mask = np.ones(len(t), dtype=bool)
+            if start_t is not None:
+                mask &= t >= start_t
+            if end_t is not None:
+                mask &= t <= end_t
+            t_f = t[mask]
+            curr_f = curr[mask]
+            if len(t_f) < 2:
+                continue
             if motor is not None:
                 motor_t, motor_pwm = motor
-                total += _mah_while_running(t, curr, motor_t, motor_pwm)
+                total += _mah_while_running(t_f, curr_f, motor_t, motor_pwm)
             elif "CurrTot" in sub and len(sub["CurrTot"]):
-                total += float(sub["CurrTot"][-1])
+                currtot_f = sub["CurrTot"][mask]
+                total += float(currtot_f[-1]) - float(currtot_f[0])
             else:
-                dt_hours = np.diff(t) / 3600.0
-                total += float(np.sum(curr[:-1] * dt_hours) * 1000.0)
+                dt_hours = np.diff(t_f) / 3600.0
+                total += float(np.sum(curr_f[:-1] * dt_hours) * 1000.0)
         return total
 
     def _efficiency_stats(
-        self, log_data: LogData, duration_s: float, distance_m: float
+        self, log_data: LogData, duration_s: float, distance_m: float,
+        start_t: float | None = None, end_t: float | None = None
     ) -> tuple[float | None, float | None, float | None, float | None]:
-        total_mah = self._battery_mah(log_data)
+        total_mah = self._battery_mah(log_data, start_t=start_t, end_t=end_t)
         overall_per_km = total_mah / (distance_m / 1000.0) if distance_m > 0 else None
         overall_per_min = total_mah / (duration_s / 60.0) if duration_s > 0 else None
 
@@ -815,8 +921,8 @@ class MissionAnalysisWidget(QWidget):
 
         motor_t, motor_pwm = forward
         fwd_time_s = _running_time_s(motor_t, motor_pwm)
-        fwd_mah = self._battery_mah(log_data, motor=forward)
-        fwd_distance_m = self._distance_m(log_data, motor=forward)
+        fwd_mah = self._battery_mah(log_data, motor=forward, start_t=start_t, end_t=end_t)
+        fwd_distance_m = self._distance_m(log_data, motor=forward, start_t=start_t, end_t=end_t)
         fwd_per_km = fwd_mah / (fwd_distance_m / 1000.0) if fwd_distance_m > 0 else None
         fwd_per_min = fwd_mah / (fwd_time_s / 60.0) if fwd_time_s > 0 else None
         return overall_per_km, overall_per_min, fwd_per_km, fwd_per_min
@@ -997,7 +1103,7 @@ class MissionAnalysisWidget(QWidget):
         # Ground speed stats
         if gnd_t is not None:
             mask = (gnd_t >= start_t) & (gnd_t <= end_t)
-            dist = self._distance_m(log_data)
+            dist = self._distance_m(log_data, start_t=start_t, end_t=end_t)
             if duration_s > 0 and dist > 0:
                 result["avg_mission_gnd"] = dist / duration_s
             if fwd is not None and mask.any():

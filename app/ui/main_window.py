@@ -40,6 +40,7 @@ from app.ui.theme import apply_dark_theme, apply_light_theme, apply_system_theme
 from app.core.time_format import set_utc_offset_hours, format_mmss
 from app.core.event_decoder import decode_event, decode_error
 from app.core.update_checker import UpdateChecker
+from app.core.changelog import CHANGELOG
 
 GPS_LAT_CANDIDATES = [("GPS", "Lat", "Lng"), ("GPS", "Lat", "Lon"), ("GLOBAL_POSITION_INT", "lat", "lon")]
 ALT_CANDIDATES = [("BARO", "Alt"), ("CTUN", "Alt"), ("GPS", "Alt"), ("GLOBAL_POSITION_INT", "relative_alt")]
@@ -183,8 +184,70 @@ class MainWindow(QMainWindow):
             self._tile_handler.cache_limit_exceeded.connect(self._on_cache_limit_exceeded)
             self.settings_widget.set_tile_handler(self._tile_handler)
 
-        # Start update check after window is shown (2 s delay to avoid slowing startup)
+        # Show changelog on first launch after update, then check for newer version
+        QTimer.singleShot(500, self._check_changelog)
         QTimer.singleShot(2000, self._start_update_check)
+
+    def _check_changelog(self):
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            data = {}
+        last_seen = data.get("last_seen_version", "")
+        if last_seen == APP_VERSION:
+            return
+        # Save current version so dialog won't show again
+        data["last_seen_version"] = APP_VERSION
+        try:
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        # Only show if we have changelog entries for this version
+        entries = CHANGELOG.get(APP_VERSION)
+        if not entries:
+            return
+        self._show_changelog_dialog(APP_VERSION, entries)
+
+    def _show_changelog_dialog(self, version: str, entries: list[str]):
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QScrollArea, QWidget, QDialogButtonBox
+        from PySide6.QtCore import Qt
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Что нового в версии {version}")
+        dlg.setMinimumWidth(520)
+
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(12)
+
+        title = QLabel(f"<b style='font-size:14px'>Версия {version}</b>")
+        outer.addWidget(title)
+
+        # Build HTML list
+        items_html = ""
+        for entry in entries:
+            # Replace **text** with <b>text</b>
+            import re
+            formatted = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", entry)
+            items_html += f"<li style='margin-bottom:6px'>{formatted}</li>"
+        html = f"<ul style='margin:0; padding-left:18px'>{items_html}</ul>"
+
+        content = QLabel(html)
+        content.setWordWrap(True)
+        content.setTextFormat(Qt.TextFormat.RichText)
+        content.setContentsMargins(4, 0, 4, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        scroll.setMaximumHeight(360)
+        outer.addWidget(scroll)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dlg.accept)
+        outer.addWidget(buttons)
+
+        dlg.exec()
 
     def _start_update_check(self):
         self._update_checker = UpdateChecker(self)
@@ -603,9 +666,16 @@ class MainWindow(QMainWindow):
                 if msg_type == "GLOBAL_POSITION_INT":
                     lat = lat / 1e7
                     lon = lon / 1e7
-                self.map_widget.set_track(table["timestamp"], lat, lon)
-                self.attitude_panel.set_position_data(table["timestamp"], lat, lon)
                 spd_key = next((k for k in ("Spd", "speed", "groundspeed") if k in table), None)
+                if spd_key is not None:
+                    spd = table[spd_key]
+                    t_gps = table["timestamp"]
+                    dt = np.diff(t_gps)
+                    cum_dist = np.concatenate([[0.0], np.cumsum(spd[:-1] * dt)])
+                else:
+                    cum_dist = None
+                self.map_widget.set_track(table["timestamp"], lat, lon, cum_dist=cum_dist)
+                self.attitude_panel.set_position_data(table["timestamp"], lat, lon)
                 if spd_key is not None:
                     self.map_widget.set_map_speed_data(table["timestamp"], table[spd_key])
                 else:
