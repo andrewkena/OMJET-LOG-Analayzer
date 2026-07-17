@@ -12,15 +12,16 @@ marker on the map and vice versa.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal, QObject, Slot
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QPalette, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QFileDialog, QMessageBox, QSplitter, QCheckBox
+    QAbstractItemView, QFileDialog, QMessageBox, QSplitter, QCheckBox, QHeaderView, QLabel
 )
 from pymavlink import mavutil
 
@@ -181,8 +182,15 @@ function setMission(coords) {
     markers = [];
     highlightedIndex = -1;
     coords.forEach(function(c, i) {
-        var m = L.circleMarker(c, {radius: 6, color: '#00e5ff', weight: 2, fillColor: '#003344', fillOpacity: 1})
-            .bindTooltip('WP ' + i)
+        var isHome = (i === 0);
+        var m = L.circleMarker(c, {
+            radius: isHome ? 8 : 6,
+            color: isHome ? '#ff9800' : '#00e5ff',
+            weight: 2,
+            fillColor: isHome ? '#ff6600' : '#003344',
+            fillOpacity: 1
+        })
+            .bindTooltip(isHome ? 'H' : 'WP ' + i)
             .addTo(map);
         m.on('mouseover', function() { notifyHover(i); });
         m.on('mouseout', function() { notifyHover(-1); });
@@ -221,6 +229,22 @@ function highlightPoint(idx) {
 """
 
 
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6_371_000.0
+    φ1, φ2 = math.radians(lat1), math.radians(lat2)
+    dφ = math.radians(lat2 - lat1)
+    dλ = math.radians(lon2 - lon1)
+    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _mission_distance_m(coords: list[tuple[float, float]]) -> float:
+    total = 0.0
+    for i in range(1, len(coords)):
+        total += _haversine_m(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1])
+    return total
+
+
 class _MissionMapWidget(QWidget):
     marker_hovered = Signal(int)
 
@@ -248,10 +272,13 @@ class _MissionMapWidget(QWidget):
         self.fit_checkbox.setChecked(True)
         self.fit_checkbox.toggled.connect(self._on_fit_toggled)
 
+        self.distance_label = QLabel("")
+
         controls = QHBoxLayout()
         controls.addWidget(self.center_checkbox)
         controls.addWidget(self.fit_checkbox)
         controls.addStretch()
+        controls.addWidget(self.distance_label)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -274,6 +301,11 @@ class _MissionMapWidget(QWidget):
         self._run_js(f"setMission({json.dumps(coords)});")
         if self.fit_checkbox.isChecked():
             self._run_js("fitAll();")
+        if len(coords) >= 2:
+            dist_m = _mission_distance_m(coords)
+            self.distance_label.setText(f"Протяжённость полётного задания: {dist_m / 1000:.2f} км")
+        else:
+            self.distance_label.setText("")
 
     def highlight_point(self, index: int):
         self._run_js(f"highlightPoint({index});")
@@ -289,6 +321,39 @@ class _MissionMapWidget(QWidget):
         super().showEvent(event)
         if self.fit_checkbox.isChecked():
             self._run_js("map.invalidateSize(); fitAll();")
+
+
+class _HomeVerticalHeader(QHeaderView):
+    """Vertical header that renders section 0 as an orange circle with 'H'."""
+
+    _HOME_BG = QColor("#ff6600")
+    _HOME_FG = QColor("#ffffff")
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Vertical, parent)
+
+    def paintSection(self, painter: QPainter, rect, logical_index: int):
+        if logical_index != 0:
+            super().paintSection(painter, rect, logical_index)
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        # Background matching the table
+        painter.fillRect(rect, self.palette().color(QPalette.Base))
+        # Orange circle
+        size = min(rect.width(), rect.height()) - 6
+        cx = rect.center().x()
+        cy = rect.center().y()
+        painter.setBrush(self._HOME_BG)
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(int(cx - size / 2), int(cy - size / 2), size, size)
+        # "H" text
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(self._HOME_FG)
+        painter.drawText(rect, Qt.AlignCenter, "H")
+        painter.restore()
 
 
 class MissionWidget(QWidget):
@@ -315,6 +380,7 @@ class MissionWidget(QWidget):
         self.table.viewport().setMouseTracking(True)
         self.table.cellEntered.connect(self._on_table_cell_entered)
         self.table.viewport().installEventFilter(self)
+        self.table.setVerticalHeader(_HomeVerticalHeader(self.table))
 
         i18n.register(self._retranslateUi)
         self._retranslateUi()
@@ -338,6 +404,11 @@ class MissionWidget(QWidget):
         )
         self.map.center_checkbox.setText(tr("Центрировать"))
         self.map.fit_checkbox.setText(tr("Показать весь трек"))
+        if self._waypoints and len(self._waypoints) >= 2:
+            dist_m = _mission_distance_m(self._waypoints)
+            self.map.distance_label.setText(
+                tr("Протяжённость полётного задания") + f": {dist_m / 1000:.2f} км"
+            )
 
     def eventFilter(self, watched, event):
         if watched is self.table.viewport() and event.type() == event.Type.Leave:
@@ -398,7 +469,7 @@ class MissionWidget(QWidget):
                 QTableWidgetItem(f"{alt:g}" if isinstance(alt, float) else str(alt)),
                 QTableWidgetItem(str(frame)),
                 QTableWidgetItem(params),
-                QTableWidgetItem(str(seq)),
+                QTableWidgetItem("H" if i == 0 else str(i)),
                 QTableWidgetItem(str(int(cmd_id)) if cmd_id != "" else ""),
                 QTableWidgetItem(description),
             ]

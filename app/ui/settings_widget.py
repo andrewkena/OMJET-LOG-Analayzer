@@ -68,8 +68,8 @@ class SettingsWidget(QWidget):
         self._eff_green = 200
         self._eff_yellow = 300
         self._eff_red = 400
-        self._hover_thrust_green = 0.5
-        self._hover_thrust_red = 1.0
+        self._hover_thrust_green = 0.4
+        self._hover_thrust_red = 0.6
         self._cog_neutral_min = -3.0
         self._cog_neutral_max = 3.0
         self._cog_front_red = 10.0
@@ -200,6 +200,16 @@ class SettingsWidget(QWidget):
         layout.addWidget(self.callout_group)
         self._load_callout_settings()
 
+        # ── Statistics ───────────────────────────────────────────────────────
+        self.stats_group = QGroupBox()
+        stats_form = QFormLayout(self.stats_group)
+        self.stat_runtime_label = QLabel("—")
+        self.stat_logs_label = QLabel("—")
+        self.stat_photos_label = QLabel("—")
+        stats_form.addRow(" ", self.stat_runtime_label)
+        stats_form.addRow(" ", self.stat_logs_label)
+        stats_form.addRow(" ", self.stat_photos_label)
+        layout.addWidget(self.stats_group)
 
         layout = right_layout
 
@@ -553,6 +563,12 @@ class SettingsWidget(QWidget):
         self.update_group.setTitle(tr("Обновления"))
         self._check_update_btn.setText(tr("Проверить обновления"))
 
+        self.stats_group.setTitle(tr("Статистика"))
+        form = self.stats_group.layout()
+        form.labelForField(self.stat_runtime_label).setText(tr("Время работы с приложением:"))
+        form.labelForField(self.stat_logs_label).setText(tr("Открыто логов:"))
+        form.labelForField(self.stat_photos_label).setText(tr("Геотегировано изображений:"))
+
     @staticmethod
     def _make_dot(color: str) -> QLabel:
         dot = QLabel()
@@ -889,6 +905,36 @@ class SettingsWidget(QWidget):
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 data = {}
             data[key] = value
+            _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def update_stats(self, runtime_s: float, logs_count: int, photos_count: int):
+        h, rem = divmod(int(runtime_s), 3600)
+        m = rem // 60
+        if h > 0:
+            runtime_str = f"{h} ч {m:02d} мин"
+        else:
+            runtime_str = f"{m} мин"
+        self.stat_runtime_label.setText(runtime_str)
+        self.stat_logs_label.setText(str(logs_count))
+        self.stat_photos_label.setText(str(photos_count))
+
+    def load_stats(self) -> tuple[float, int, int]:
+        try:
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            s = data.get("stats", {})
+            return float(s.get("runtime_s", 0)), int(s.get("logs", 0)), int(s.get("photos", 0))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, KeyError, TypeError):
+            return 0.0, 0, 0
+
+    def save_stats(self, runtime_s: float, logs_count: int, photos_count: int):
+        try:
+            try:
+                data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                data = {}
+            data["stats"] = {"runtime_s": runtime_s, "logs": logs_count, "photos": photos_count}
             _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             pass

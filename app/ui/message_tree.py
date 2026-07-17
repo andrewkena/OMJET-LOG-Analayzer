@@ -1039,6 +1039,7 @@ _PRESETS = [
     ("battery1_vs_battery2", "Battery 1 - Battery 2"),
     ("baro_vs_gps_altitude", "Baro - GPS Altitude"),
     ("center_of_gravity", "Center of Gravity"),
+    ("ctun_qtun_tho", "CTUN.ThO - QTUN.ThO"),
     ("gps1_vs_gps2", "GPS 1 - GPS 2"),
 ]
 

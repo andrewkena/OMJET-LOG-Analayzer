@@ -1391,6 +1391,8 @@ class _PhotoFolderPanel(QWidget):
 
 
 class PhotoGeotagWidget(QWidget):
+    geotagging_done = Signal(int)  # number of successfully tagged photos
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -1960,10 +1962,11 @@ class PhotoGeotagWidget(QWidget):
                 errors.append(f"{f.name}: {e}")
         progress.setValue(n)
 
+        tagged_ok = n - len(errors)
         if errors:
             QMessageBox.warning(
                 self, tr("Геотегирование завершено с ошибками"),
-                f"Обработано: {n - len(errors)} из {n}.\n"
+                f"Обработано: {tagged_ok} из {n}.\n"
                 f"Папка: {out_dir}\n" + "\n".join(errors[:10])
             )
         else:
@@ -1971,6 +1974,8 @@ class PhotoGeotagWidget(QWidget):
                 self, tr("Геотегирование завершено"),
                 f"Координаты записаны в {n} фотографий.\nПапка: {out_dir}"
             )
+        if tagged_ok > 0:
+            self.geotagging_done.emit(tagged_ok)
 
     def _export_csv(self):
         if not self._rows:

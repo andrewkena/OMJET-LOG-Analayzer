@@ -73,6 +73,8 @@ ALT_GAUGE_CANDIDATES = [
 ]
 # (msg_type, north_field, east_field) -> EKF-estimated wind velocity components, m/s
 WIND_CANDIDATES = [("XKF2", "VWN", "VWE"), ("NKF2", "VWN", "VWE")]
+# (msg_type, field, invert) -> vertical speed in m/s, positive = climb
+VSPEED_CANDIDATES = [("CTUN", "VSpd", False), ("NKF1", "VD", True), ("GPS", "VZ", False)]
 # (msg_type, field) used by the "Baro vs GPS Altitude" graph preset
 BARO_GPS_ALT_CANDIDATES = [("BARO", "Alt"), ("GPS", "Alt")]
 
@@ -183,6 +185,18 @@ class MainWindow(QMainWindow):
         if self._tile_handler is not None:
             self._tile_handler.cache_limit_exceeded.connect(self._on_cache_limit_exceeded)
             self.settings_widget.set_tile_handler(self._tile_handler)
+
+        # ── Statistics ──────────────────────────────────────────────────────
+        self._stat_runtime_s, self._stat_logs, self._stat_photos = self.settings_widget.load_stats()
+        self._stat_session_start = __import__("time").monotonic()
+        self.settings_widget.update_stats(self._stat_runtime_s, self._stat_logs, self._stat_photos)
+
+        self._stat_timer = QTimer(self)
+        self._stat_timer.setInterval(60_000)
+        self._stat_timer.timeout.connect(self._on_stat_tick)
+        self._stat_timer.start()
+
+        self.photo_geotag_widget.geotagging_done.connect(self._on_geotagging_done)
 
         # Show changelog on first launch after update, then check for newer version
         QTimer.singleShot(500, self._check_changelog)
@@ -328,6 +342,7 @@ class MainWindow(QMainWindow):
         self.graph_labels: list[QLabel] = []
         self.graph_clear_btns: list[QPushButton] = []
         self.graph_save_btns: list[QPushButton] = []
+        self.graph_expand_btns: list[QPushButton] = []
         for i, graph in enumerate(self.graphs):
             wrapper = QWidget()
             wrapper_layout = QVBoxLayout(wrapper)
@@ -339,6 +354,12 @@ class MainWindow(QMainWindow):
             self.graph_labels.append(lbl)
             header_row.addWidget(lbl)
             header_row.addStretch()
+            expand_btn = QPushButton("⛶")
+            expand_btn.setFixedWidth(32)
+            expand_btn.setToolTip("Развернуть график в отдельном окне")
+            expand_btn.clicked.connect(lambda _=False, idx=i: self._expand_graph(idx))
+            self.graph_expand_btns.append(expand_btn)
+            header_row.addWidget(expand_btn)
             save_btn = QPushButton("💾")
             save_btn.setFixedWidth(32)
             save_btn.setToolTip("Сохранить график как изображение")
@@ -614,6 +635,9 @@ class MainWindow(QMainWindow):
 
         if self.settings_widget.is_sound_alerts_enabled():
             self._load_done_sound.play()
+
+        self._stat_logs += 1
+        self._on_stat_tick()
 
     def _load_cmd_waypoint_timeline(self):
         if self.log_data is None:
@@ -940,6 +964,17 @@ class MainWindow(QMainWindow):
         else:
             self.attitude_panel.clear_altitude_data()
 
+        for msg_type, field, invert in VSPEED_CANDIDATES:
+            table = self.log_data.messages.get(msg_type)
+            if table and field in table:
+                vals = np.asarray(table[field], dtype=float)
+                if invert:
+                    vals = -vals
+                self.attitude_panel.set_vspeed_data(np.asarray(table["timestamp"], dtype=float), vals)
+                break
+        else:
+            self.attitude_panel.clear_vspeed_data()
+
         for msg_type, north_f, east_f in WIND_CANDIDATES:
             table = self.log_data.messages.get(msg_type)
             if table and north_f in table and east_f in table:
@@ -1047,6 +1082,61 @@ class MainWindow(QMainWindow):
         self.attitude_panel.set_vehicle_type(vehicle_type)
         self.map_widget.set_vehicle_type(vehicle_type)
 
+    def _expand_graph(self, graph_idx: int):
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QSizePolicy, QPushButton
+        from app.ui.graph_widget import GraphWidget
+
+        src = self.graphs[graph_idx]
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"График {graph_idx + 1}")
+        dlg.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Toolbar: save button + hint
+        toolbar = QHBoxLayout()
+        hint = QLabel("ЛКМ — закрепить значение  |  ПКМ — удалить метки")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        toolbar.addWidget(hint)
+        toolbar.addStretch()
+        save_btn = QPushButton("💾 Сохранить")
+        save_btn.setFixedWidth(120)
+
+        def _save_popup():
+            path, _ = QFileDialog.getSaveFileName(
+                dlg, "Сохранить график", "", "PNG (*.png);;JPEG (*.jpg *.jpeg)"
+            )
+            if path:
+                popup_graph.grab().save(path)
+
+        save_btn.clicked.connect(_save_popup)
+        toolbar.addWidget(save_btn)
+        layout.addLayout(toolbar)
+
+        popup_graph = GraphWidget()
+        popup_graph.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        # Correct time origin for mm:ss axis
+        if hasattr(src, "time_axis"):
+            popup_graph.set_time_origin(src.time_axis.t0)
+
+        for key, t_arr in src._curve_t.items():
+            y_arr = src._curve_y[key]
+            label = src._curve_label.get(key, key)
+            popup_graph.add_curve(key, t_arr, y_arr, label)
+
+        if hasattr(src, "_last_cursor_t") and src._last_cursor_t:
+            popup_graph.set_cursor_time(src._last_cursor_t)
+
+        popup_graph.enable_pin_mode()
+        popup_graph.cursor_moved.connect(self._on_cursor_moved)
+
+        layout.addWidget(popup_graph)
+        dlg.showMaximized()
+        dlg.exec()
+
     def _save_graph_image(self, graph_idx: int):
         from PySide6.QtGui import QPixmap
         path, _ = QFileDialog.getSaveFileName(
@@ -1111,6 +1201,8 @@ class MainWindow(QMainWindow):
             table = self.log_data.messages.get("PIDP")
             if table and "I" in table:
                 self.message_tree.set_field_checked("PIDP", "I", True)
+        elif preset_id == "ctun_qtun_tho":
+            self._apply_ctun_qtun_tho_preset()
         elif preset_id == "gps1_vs_gps2":
             self._apply_gps_preset()
 
@@ -1181,6 +1273,51 @@ class MainWindow(QMainWindow):
                     f"Удалите один из них или выберите другой график."
                 )
                 break
+
+    def _apply_ctun_qtun_tho_preset(self):
+        curves = []
+        for msg_type, field, label in (
+            ("CTUN", "ThO", "CTUN.ThO"),
+            ("QTUN", "ThO", "QTUN.ThO"),
+        ):
+            table = self.log_data.messages.get(msg_type)
+            if table and field in table:
+                curves.append((
+                    f"{msg_type}.{field}",
+                    np.asarray(table["timestamp"], dtype=float),
+                    np.asarray(table[field], dtype=float),
+                    label,
+                ))
+        if not curves:
+            QMessageBox.information(self, "Пресет", "Данные CTUN.ThO / QTUN.ThO не найдены в логе.")
+            return
+        idx = self.target_graph_combo.currentIndex()
+        graph = self.graphs[idx]
+        for key, t, y, label in curves:
+            if graph.add_curve(key, t, y, label):
+                self._field_graph_assignment[key] = idx
+            else:
+                QMessageBox.warning(
+                    self, "График заполнен",
+                    f"В графике {idx + 1} уже максимум параметров ({MAX_CURVES}). "
+                    f"Удалите один из них или выберите другой график."
+                )
+                break
+
+    def _on_stat_tick(self):
+        import time as _time
+        elapsed = _time.monotonic() - self._stat_session_start
+        current_total = self._stat_runtime_s + elapsed
+        self.settings_widget.update_stats(current_total, self._stat_logs, self._stat_photos)
+        self.settings_widget.save_stats(current_total, self._stat_logs, self._stat_photos)
+
+    def _on_geotagging_done(self, count: int):
+        self._stat_photos += count
+        self._on_stat_tick()
+
+    def closeEvent(self, event):
+        self._on_stat_tick()
+        super().closeEvent(event)
 
     def _on_cursor_moved(self, t: float):
         self._current_time = t

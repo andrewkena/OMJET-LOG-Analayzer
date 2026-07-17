@@ -11,7 +11,7 @@ from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QPolygonF, QFont
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame, QGraphicsOpacityEffect
 
-from app.ui.gauge_widget import TapeGauge, BatteryGauge
+from app.ui.gauge_widget import TapeGauge, BatteryGauge, VSpeedGauge
 
 _BANK_SCALE_DEGREES = (-60, -45, -30, -15, 15, 30, 45, 60)
 _PITCH_LADDER_DEGREES = (10, 20, 30)
@@ -321,6 +321,7 @@ class AttitudePanel(QWidget):
         self.horizon = AttitudeIndicator()
         self.compass = HeadingIndicator()
         self.speed_gauge = TapeGauge("", "м/с", extra_label=None, unit_inline=True, bar_height=150)
+        self.vspeed_gauge = VSpeedGauge("", "м/с", bar_height=150)
         self.alt_gauge = TapeGauge("", "м", unit_inline=True, bar_height=150)
         self.bat1_volt_gauge = BatteryGauge("", "V", bar_height=150)
         self.bat1_curr_gauge = TapeGauge("", "A", current_warning=True, unit_inline=True, bar_height=150)
@@ -331,11 +332,15 @@ class AttitudePanel(QWidget):
         speed_label = QLabel("Воздушная\nскорость")
         speed_label.setAlignment(Qt.AlignHCenter)
         speed_label.setStyleSheet(_BOLD_STYLE)
+        vspeed_label = QLabel("Вертик.\nскорость")
+        vspeed_label.setAlignment(Qt.AlignHCenter)
+        vspeed_label.setStyleSheet(_BOLD_STYLE)
         alt_label = QLabel("Высота")
         alt_label.setAlignment(Qt.AlignHCenter)
         alt_label.setStyleSheet(_BOLD_STYLE)
 
         speed_container = _column_container(260, [speed_label], self.speed_gauge)
+        vspeed_container = _column_container(260, [vspeed_label], self.vspeed_gauge)
 
         self.roll_label = QLabel("Крен: --")
         self.pitch_label = QLabel("Тангаж: --")
@@ -394,7 +399,13 @@ class AttitudePanel(QWidget):
         separator.setFrameShape(QFrame.VLine)
         separator.setFrameShadow(QFrame.Sunken)
 
+        vspeed_sep = QFrame()
+        vspeed_sep.setFrameShape(QFrame.VLine)
+        vspeed_sep.setFrameShadow(QFrame.Sunken)
+
         layout = QHBoxLayout(self)
+        layout.addWidget(vspeed_container, alignment=Qt.AlignTop)
+        layout.addWidget(vspeed_sep)
         layout.addWidget(speed_container, alignment=Qt.AlignTop)
         layout.addLayout(horizon_box)
         layout.addLayout(compass_box)
@@ -410,6 +421,8 @@ class AttitudePanel(QWidget):
         self._yaw = np.array([])
         self._speed_t = np.array([])
         self._speed_v = np.array([])
+        self._vspeed_t = np.array([])
+        self._vspeed_v = np.array([])
         self._gs_t = np.array([])
         self._gs_v = np.array([])
         self._alt_t = np.array([])
@@ -528,6 +541,17 @@ class AttitudePanel(QWidget):
         self._speed_t = np.array([])
         self.speed_gauge.set_value(0.0)
 
+    def set_vspeed_data(self, t: np.ndarray, vspeed: np.ndarray):
+        self._vspeed_t, self._vspeed_v = t, vspeed
+        if len(vspeed):
+            self.vspeed_gauge.set_range(float(np.nanmax(np.abs(vspeed))) * 1.1 or 1.0)
+        if len(t):
+            self.vspeed_gauge.set_value(float(vspeed[0]))
+
+    def clear_vspeed_data(self):
+        self._vspeed_t = np.array([])
+        self.vspeed_gauge.set_value(0.0)
+
     def set_ground_speed_data(self, t: np.ndarray, speed: np.ndarray):
         self._gs_t, self._gs_v = t, speed
         if len(t):
@@ -607,6 +631,10 @@ class AttitudePanel(QWidget):
             idx = int(np.searchsorted(self._speed_t, t))
             idx = max(0, min(idx, len(self._speed_t) - 1))
             self.speed_gauge.set_value(float(self._speed_v[idx]))
+        if len(self._vspeed_t):
+            idx = int(np.searchsorted(self._vspeed_t, t))
+            idx = max(0, min(idx, len(self._vspeed_t) - 1))
+            self.vspeed_gauge.set_value(float(self._vspeed_v[idx]))
         if len(self._gs_t):
             idx = int(np.searchsorted(self._gs_t, t))
             idx = max(0, min(idx, len(self._gs_t) - 1))

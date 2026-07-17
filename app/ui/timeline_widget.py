@@ -52,19 +52,25 @@ class TimelineWidget(QWidget):
         self._t1 = 0.0
         self._suppress = False
 
-        self.plot_widget.viewport().setMouseTracking(True)
         self.plot_widget.viewport().installEventFilter(self)
 
+    def _timeline_t_from_event(self, event):
+        vb = self.plot_widget.getViewBox()
+        try:
+            pt = event.position()
+        except AttributeError:
+            pt = QPointF(event.pos())
+        data_pt = vb.mapSceneToView(pt)
+        return max(self._t0, min(self._t1, data_pt.x()))
+
     def eventFilter(self, obj, event):
-        if obj is self.plot_widget.viewport() and event.type() == QEvent.Type.MouseMove:
-            if event.buttons() == Qt.MouseButton.NoButton and self._t1 > self._t0:
-                vb = self.plot_widget.getViewBox()
-                try:
-                    pt = event.position()
-                except AttributeError:
-                    pt = QPointF(event.pos())
-                data_pt = vb.mapSceneToView(pt)
-                t = max(self._t0, min(self._t1, data_pt.x()))
+        if obj is self.plot_widget.viewport() and self._t1 > self._t0:
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                t = self._timeline_t_from_event(event)
+                self.set_cursor_time(t)
+                self.cursor_changed.emit(t)
+            elif event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
+                t = self._timeline_t_from_event(event)
                 self.set_cursor_time(t)
                 self.cursor_changed.emit(t)
         return False

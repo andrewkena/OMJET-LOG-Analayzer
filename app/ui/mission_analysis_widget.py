@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from app.core import i18n
 from app.core.log_loader import LogData
-from app.core.time_format import format_mmss, format_gps_time, format_gps_date
+from app.core.time_format import format_mmss, format_gps_time, format_gps_date, get_utc_offset_hours
 from app.ui.battery_widget import BatteryWidget, _battery_instance_table
 
 # Same candidate lists used elsewhere in the app (main_window.py) for
@@ -294,10 +294,13 @@ class MissionAnalysisWidget(QWidget):
         self.avg_fwd_air_label = QLabel("—")
         self.avg_mission_gnd_label = QLabel("—")
         self.avg_mission_air_label = QLabel("—")
+        self.max_climb_label = QLabel("—")
+        self.max_descent_label = QLabel("—")
         self.speed_layout.addRow(" ", _gnd_row_w)
         for lbl in (self.max_fwd_air_label,
                     self.avg_fwd_gnd_label, self.avg_fwd_air_label,
-                    self.avg_mission_gnd_label, self.avg_mission_air_label):
+                    self.avg_mission_gnd_label, self.avg_mission_air_label,
+                    self.max_climb_label, self.max_descent_label):
             self.speed_layout.addRow(" ", lbl)
 
         self.cog_group = QGroupBox()
@@ -437,6 +440,8 @@ class MissionAnalysisWidget(QWidget):
         self.speed_layout.labelForField(self.avg_fwd_air_label).setText(tr("Средняя воздушная скорость (гориз. полёт):"))
         self.speed_layout.labelForField(self.avg_mission_gnd_label).setText(tr("Средняя земная скорость (по миссии):"))
         self.speed_layout.labelForField(self.avg_mission_air_label).setText(tr("Средняя воздушная скорость (по миссии):"))
+        self.speed_layout.labelForField(self.max_climb_label).setText(tr("Макс. вертикальная скорость (набор):"))
+        self.speed_layout.labelForField(self.max_descent_label).setText(tr("Макс. вертикальная скорость (снижение):"))
 
         self.cog_group.setTitle(tr("Расчётная центровка"))
         self.cog_layout.labelForField(self.cog_overall_label.parent()).setText(tr("Центровка за весь полёт:"))
@@ -511,15 +516,19 @@ class MissionAnalysisWidget(QWidget):
         self._start_t = start_t
         self._end_t = end_t
         self.mission_date_label.setText(format_gps_date(start_t))
-        self.start_label.setText(format_gps_time(start_t))
-        self.end_label.setText(format_gps_time(end_t))
+        _tz_h = get_utc_offset_hours()
+        _tz_str = f"UTC{'+' if _tz_h >= 0 else ''}{int(_tz_h):+d}" if _tz_h == int(_tz_h) else f"UTC{_tz_h:+.1f}"
+        _tz_str = f"UTC+0" if _tz_h == 0 else f"UTC{'+' if _tz_h > 0 else ''}{_tz_h:g}"
+        self.start_label.setText(f"{format_gps_time(start_t)} ({_tz_str})")
+        self.end_label.setText(f"{format_gps_time(end_t)} ({_tz_str})")
         _dur_s = max(0.0, end_t - start_t)
         _total_m = int(_dur_s) // 60
         _h, _m = divmod(_total_m, 60)
         _hm = f"{_h} ч {_m:02d} мин" if _h > 0 else f"{_m} мин"
         self.duration_label.setText(f"{format_mmss(_dur_s)} ({_hm})")
 
-        self.distance_label.setText(f"{self._distance_m(log_data, start_t=start_t, end_t=end_t):.0f} м")
+        _dist_m = self._distance_m(log_data, start_t=start_t, end_t=end_t)
+        self.distance_label.setText(f"{_dist_m:.0f} м ({_dist_m / 1000:.2f} км)")
 
         max_range = self._max_range_m(log_data)
         if max_range >= 1000:
@@ -596,6 +605,8 @@ class MissionAnalysisWidget(QWidget):
         self.avg_fwd_air_label.setText(_ms("avg_fwd_air"))
         self.avg_mission_gnd_label.setText(_ms("avg_mission_gnd"))
         self.avg_mission_air_label.setText(_ms("avg_mission_air"))
+        self.max_climb_label.setText(_ms("max_climb"))
+        self.max_descent_label.setText(_ms("max_descent"))
         self._check_gnd_speed_warning(log_data)
 
         # CG from PIDP.I
@@ -1129,6 +1140,32 @@ class MissionAnalysisWidget(QWidget):
                     result["max_fwd_air"] = float(np.max(s))
                     result["avg_fwd_air"] = float(np.mean(s))
 
+        # Vertical speed stats (CTUN.VSpd positive=up; NKF1.VD positive=down → invert)
+        vspd_t = vspd_vals = None
+        for msg_type, vfield, invert in (
+            ("CTUN", "VSpd", False),
+            ("NKF1", "VD",   True),
+            ("GPS",  "VZ",   False),
+        ):
+            table = log_data.messages.get(msg_type)
+            if table and vfield in table and len(table[vfield]) > 0:
+                vspd_t = np.asarray(table["timestamp"], dtype=float)
+                vspd_vals = np.asarray(table[vfield], dtype=float)
+                if invert:
+                    vspd_vals = -vspd_vals
+                break
+
+        if vspd_t is not None:
+            vmask = (vspd_t >= start_t) & (vspd_t <= end_t)
+            if vmask.any():
+                v = vspd_vals[vmask]
+                pos = v[v > 0]
+                neg = v[v < 0]
+                if len(pos):
+                    result["max_climb"] = float(np.max(pos))
+                if len(neg):
+                    result["max_descent"] = float(np.abs(np.min(neg)))
+
         return result
 
     def _wind_series(self, log_data: LogData) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
@@ -1382,6 +1419,8 @@ class MissionAnalysisWidget(QWidget):
             "avg_fwd_air": self.avg_fwd_air_label.text(),
             "avg_mission_gnd": self.avg_mission_gnd_label.text(),
             "avg_mission_air": self.avg_mission_air_label.text(),
+            "max_climb": self.max_climb_label.text(),
+            "max_descent": self.max_descent_label.text(),
             "cog_overall": self.cog_overall_label.text(),
             "cog_fwd": self.cog_fwd_label.text(),
         }

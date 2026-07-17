@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Signal, QEvent
+from PySide6.QtCore import Signal, QEvent, Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
+from app.core.time_format import format_mmss
 from app.ui.time_axis import TimeAxisItem
 
 _COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
@@ -59,10 +60,13 @@ class GraphWidget(QWidget):
         self._curve_y: dict[str, np.ndarray] = {}
         self._curve_slot: dict[str, int] = {}   # key → slot index (0 = main VB)
         self._curve_label: dict[str, str] = {}
+        self._curve_color: dict[str, str] = {}
         self._minmax_items: dict[str, tuple] = {}
         self._hover_items: dict[str, tuple[pg.ScatterPlotItem, pg.TextItem]] = {}
         self._color_idx = 0
         self._last_cursor_t = 0.0
+        self._pin_mode = False
+        self._pinned_items: list[tuple[pg.ViewBox, pg.ScatterPlotItem, pg.TextItem]] = []
 
         self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("w", width=1))
         self.plot_widget.addItem(self.vline, ignoreBounds=True)
@@ -103,6 +107,20 @@ class GraphWidget(QWidget):
     # ------------------------------------------------------------------ #
 
     def eventFilter(self, obj, event):
+        if obj is self.plot_widget.viewport() and self._pin_mode:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                try:
+                    vp_pos = event.position().toPoint()
+                except AttributeError:
+                    vp_pos = event.pos()
+                scene_pos = self.plot_widget.mapToScene(vp_pos)
+                if event.button() == Qt.MouseButton.LeftButton:
+                    view_pos = self.plot_widget.plotItem.vb.mapSceneToView(scene_pos)
+                    self._pin_at(view_pos.x())
+                    return True
+                elif event.button() == Qt.MouseButton.RightButton:
+                    self._clear_pins()
+                    return True
         if obj is self.plot_widget.viewport() and event.type() == QEvent.Type.Wheel:
             delta = event.angleDelta().y()
             if delta == 0:
@@ -157,6 +175,7 @@ class GraphWidget(QWidget):
             return False
 
         color = self._next_color()
+        self._curve_color[key] = color
         pen = pg.mkPen(color, width=1.5)
         slot = self._free_slot()
         vb = self._all_vbs[slot]
@@ -218,6 +237,7 @@ class GraphWidget(QWidget):
 
         self._curve_t.pop(key, None)
         self._curve_y.pop(key, None)
+        self._curve_color.pop(key, None)
 
         if slot > 0:
             self._all_vbs[slot].setVisible(False)
@@ -291,6 +311,54 @@ class GraphWidget(QWidget):
             label.setPos(tarr[idx], yv)
             label.setText(f"{yv:.3g}")
             label.show()
+
+    # ------------------------------------------------------------------ #
+    #  Pin-on-click (popup mode)                                          #
+    # ------------------------------------------------------------------ #
+
+    def enable_pin_mode(self):
+        self._pin_mode = True
+
+    def _clear_pins(self):
+        for vb, dot, label in self._pinned_items:
+            try:
+                vb.removeItem(dot)
+                vb.removeItem(label)
+            except Exception:
+                pass
+        self._pinned_items.clear()
+
+    def _pin_at(self, t: float):
+        for key in self._curves:
+            tarr = self._curve_t.get(key)
+            yarr = self._curve_y.get(key)
+            if tarr is None or len(tarr) == 0:
+                continue
+            idx = int(np.searchsorted(tarr, t))
+            idx = min(max(idx, 0), len(tarr) - 1)
+            if idx > 0 and abs(tarr[idx - 1] - t) < abs(tarr[idx] - t):
+                idx -= 1
+            yv = yarr[idx]
+            if np.isnan(yv):
+                continue
+            color = self._curve_color.get(key, "#ffffff")
+            slot = self._curve_slot.get(key, 0)
+            vb = self._all_vbs[slot]
+            time_str = format_mmss(tarr[idx] - self.time_axis.t0)
+            dot = pg.ScatterPlotItem(
+                x=[tarr[idx]], y=[yv],
+                pen=pg.mkPen(color), brush=pg.mkBrush("white"), size=10, symbol="o"
+            )
+            dot.setZValue(30)
+            label = pg.TextItem(
+                f"{time_str}\n{yv:.4g}", color=color, anchor=(0, 1),
+                border=pg.mkPen(color), fill=pg.mkBrush(0, 0, 0, 180)
+            )
+            label.setZValue(30)
+            label.setPos(tarr[idx], yv)
+            vb.addItem(dot, ignoreBounds=True)
+            vb.addItem(label, ignoreBounds=True)
+            self._pinned_items.append((vb, dot, label))
 
     # ------------------------------------------------------------------ #
     #  Cursor / selection                                                  #

@@ -248,6 +248,70 @@ class BatteryGauge(QWidget):
                           f"{voltage_per_cell:.1f} В/я")
 
 
+class VSpeedGauge(QWidget):
+    """Variometer: bar fills from centre upward (green = climb) or downward (red = descent)."""
+
+    def __init__(self, title: str, unit: str, bar_height: int = 150, parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.unit = unit
+        self._bar_height = bar_height
+        self._title_offset = 14 * title.count("\n")
+        self.setFixedSize(70, 170 + self._title_offset + (bar_height - 100))
+        self._value = 0.0
+        self._max_abs = 5.0
+
+    def set_range(self, max_abs: float):
+        self._max_abs = max(max_abs, 0.5)
+        self.update()
+
+    def set_value(self, value: float):
+        self._value = value
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect()
+
+        title_h = 14 + self._title_offset
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("white"))
+        painter.drawText(QRectF(0, 0, rect.width(), title_h), Qt.AlignCenter, self.title)
+        font.setBold(False)
+        painter.setFont(font)
+
+        bar_rect = QRectF(rect.width() / 2 - 10, 15 + self._title_offset, 20, self._bar_height)
+        painter.setPen(QPen(QColor("#888888"), 1))
+        painter.setBrush(QColor(25, 25, 25))
+        painter.drawRect(bar_rect)
+
+        mid_y = bar_rect.center().y()
+        # Center dashed line
+        painter.setPen(QPen(QColor("#666666"), 1, Qt.DashLine))
+        painter.drawLine(QPointF(bar_rect.left() - 4, mid_y), QPointF(bar_rect.right() + 4, mid_y))
+
+        frac = max(-1.0, min(1.0, self._value / self._max_abs)) if self._max_abs > 0 else 0.0
+        half = bar_rect.height() / 2
+        painter.setPen(Qt.NoPen)
+        if frac > 0:
+            fill_h = half * frac
+            painter.setBrush(QColor(60, 180, 75))
+            painter.drawRect(QRectF(bar_rect.left(), mid_y - fill_h, bar_rect.width(), fill_h))
+        elif frac < 0:
+            fill_h = half * abs(frac)
+            painter.setBrush(QColor(230, 25, 75))
+            painter.drawRect(QRectF(bar_rect.left(), mid_y, bar_rect.width(), fill_h))
+
+        painter.setPen(QColor("white"))
+        value_y = 15 + self._title_offset + self._bar_height + 5
+        sign = "+" if self._value > 0 else ""
+        painter.drawText(QRectF(0, value_y, rect.width(), 16), Qt.AlignCenter,
+                         f"{sign}{self._value:.1f} {self.unit}")
+
+
 class DeflectionGauge(QWidget):
     """Vertical scale with a marker showing deflection from center (-1..1), e.g. for control surfaces."""
 
