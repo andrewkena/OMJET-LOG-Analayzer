@@ -275,6 +275,8 @@ class _MissionMapWidget(QWidget):
         self.distance_label = QLabel("")
 
         controls = QHBoxLayout()
+        controls.setContentsMargins(4, 2, 4, 2)
+        controls.setSpacing(6)
         controls.addWidget(self.center_checkbox)
         controls.addWidget(self.fit_checkbox)
         controls.addStretch()
@@ -282,8 +284,9 @@ class _MissionMapWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.view)
-        layout.addLayout(controls)
+        layout.setSpacing(0)
+        layout.addWidget(self.view, 1)
+        layout.addLayout(controls, 0)
 
     def _on_load_finished(self, ok: bool):
         self._ready = ok
