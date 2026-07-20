@@ -322,7 +322,7 @@ class AttitudePanel(QWidget):
         self.compass = HeadingIndicator()
         self.speed_gauge = TapeGauge("", "м/с", extra_label=None, unit_inline=True, bar_height=150)
         self.vspeed_gauge = VSpeedGauge("", "м/с", bar_height=150)
-        self.alt_gauge = TapeGauge("", "м", unit_inline=True, bar_height=150)
+        self.alt_gauge = TapeGauge("", "м", unit_inline=True, bar_height=150, extra_label=None)
         self.bat1_volt_gauge = BatteryGauge("", "V", bar_height=150)
         self.bat1_curr_gauge = TapeGauge("", "A", current_warning=True, unit_inline=True, bar_height=150)
         self.bat2_volt_gauge = BatteryGauge("", "V", bar_height=150)
@@ -427,6 +427,8 @@ class AttitudePanel(QWidget):
         self._gs_v = np.array([])
         self._alt_t = np.array([])
         self._alt_v = np.array([])
+        self._baro_t = np.array([])
+        self._baro_v = np.array([])
         self._bat_t = {1: np.array([]), 2: np.array([])}
         self._bat_volt = {1: np.array([]), 2: np.array([])}
         self._bat_curr = {1: np.array([]), 2: np.array([])}
@@ -568,9 +570,20 @@ class AttitudePanel(QWidget):
         if len(t):
             self.alt_gauge.set_value(float(alt[0]))
 
+    def set_baro_altitude_data(self, t: np.ndarray, alt: np.ndarray):
+        self._baro_t, self._baro_v = t, alt
+
+    def clear_baro_altitude_data(self):
+        self._baro_t = np.array([])
+        self._baro_v = np.array([])
+        self.alt_gauge.set_extra_text("")
+
     def clear_altitude_data(self):
         self._alt_t = np.array([])
+        self._baro_t = np.array([])
+        self._baro_v = np.array([])
         self.alt_gauge.set_value(0.0)
+        self.alt_gauge.set_extra_text("")
 
     def set_wind_data(self, t: np.ndarray, direction_deg: np.ndarray, speed: np.ndarray):
         self._wind_t, self._wind_dir, self._wind_speed = t, direction_deg, speed
@@ -643,6 +656,10 @@ class AttitudePanel(QWidget):
             idx = int(np.searchsorted(self._alt_t, t))
             idx = max(0, min(idx, len(self._alt_t) - 1))
             self.alt_gauge.set_value(float(self._alt_v[idx]))
+            if len(self._baro_t):
+                bidx = int(np.searchsorted(self._baro_t, t))
+                bidx = max(0, min(bidx, len(self._baro_t) - 1))
+                self.alt_gauge.set_extra_text(f"{float(self._baro_v[bidx]):.1f} м")
         if len(self._wind_t):
             idx = int(np.searchsorted(self._wind_t, t))
             idx = max(0, min(idx, len(self._wind_t) - 1))

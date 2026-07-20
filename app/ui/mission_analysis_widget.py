@@ -258,6 +258,15 @@ class MissionAnalysisWidget(QWidget):
         self.photo_layout.addRow(" ", self.avg_photo_time_label)
         self.photo_layout.addRow(" ", self.avg_photo_distance_label)
 
+        self.traj_group = QGroupBox()
+        self.traj_layout = QFormLayout(self.traj_group)
+        self.traj_accuracy_label = QLabel("—")
+        self.traj_avg_dev_label = QLabel("—")
+        self.traj_max_dev_label = QLabel("—")
+        self.traj_layout.addRow(" ", self.traj_accuracy_label)
+        self.traj_layout.addRow(" ", self.traj_avg_dev_label)
+        self.traj_layout.addRow(" ", self.traj_max_dev_label)
+
         self.altitude_group = QGroupBox()
         self.altitude_layout = QFormLayout(self.altitude_group)
         self.takeoff_alt_label = QLabel("—")
@@ -368,6 +377,7 @@ class MissionAnalysisWidget(QWidget):
         mid_column.addWidget(self.wind_group)
         mid_column.addWidget(self._radio_outer)
         mid_column.addWidget(self.photo_group)
+        mid_column.addWidget(self.traj_group)
         mid_column.addStretch()
 
         right_column = QVBoxLayout()
@@ -424,6 +434,11 @@ class MissionAnalysisWidget(QWidget):
         self.photo_layout.labelForField(self.trig_count_label).setText(tr("Количество фотоимпульсов полученных от камеры:"))
         self.photo_layout.labelForField(self.avg_photo_time_label).setText(tr("Среднее время между фотоснимками:"))
         self.photo_layout.labelForField(self.avg_photo_distance_label).setText(tr("Среднее расстояние между фотоснимками:"))
+
+        self.traj_group.setTitle(tr("Точность траектории"))
+        self.traj_layout.labelForField(self.traj_accuracy_label).setText(tr("Точность попадания в полётное задание:"))
+        self.traj_layout.labelForField(self.traj_avg_dev_label).setText(tr("Среднее отклонение от полётного задания:"))
+        self.traj_layout.labelForField(self.traj_max_dev_label).setText(tr("Максимальное отклонение от полётного задания:"))
 
         self.altitude_group.setTitle(tr("Высота"))
         self.altitude_layout.labelForField(self.takeoff_alt_label).setText(tr("Высота взлёта:"))
@@ -564,6 +579,16 @@ class MissionAnalysisWidget(QWidget):
         self.avg_photo_distance_label.setText(
             f"{avg_photo_distance:.1f} м" if avg_photo_distance is not None else "—"
         )
+
+        hit_pct, avg_dev, max_dev = self._trajectory_accuracy(log_data)
+        if hit_pct is not None:
+            self.traj_accuracy_label.setText(f"{hit_pct:.0f} %")
+            self.traj_avg_dev_label.setText(f"{avg_dev:.1f} м")
+            self.traj_max_dev_label.setText(f"{max_dev:.1f} м")
+        else:
+            self.traj_accuracy_label.setText("—")
+            self.traj_avg_dev_label.setText("—")
+            self.traj_max_dev_label.setText("—")
 
         overall_per_km, overall_per_min, fwd_per_km, fwd_per_min = self._efficiency_stats(
             log_data, duration, self._distance_m(log_data, start_t=start_t, end_t=end_t),
@@ -1424,6 +1449,101 @@ class MissionAnalysisWidget(QWidget):
             "cog_overall": self.cog_overall_label.text(),
             "cog_fwd": self.cog_fwd_label.text(),
         }
+
+    def _trajectory_accuracy(self, log_data: LogData) -> tuple[float | None, float | None, float | None]:
+        """Return (hit_pct, mean_deviation_m, max_deviation_m).
+
+        hit_pct — share of NAV waypoints where the GPS track passed within
+        WP_RADIUS (read from log parameters, default 30 m), expressed as 0-100.
+        For each waypoint the minimum Haversine distance from any GPS track point
+        is used. Returns (None, None, None) when mission or GPS track is absent.
+        """
+        _NAV_PREFIXES = ("NAV_WAYPOINT", "NAV_SPLINE_WAYPOINT", "NAV_LOITER",
+                         "NAV_VTOL_TAKEOFF", "NAV_VTOL_LAND", "NAV_TAKEOFF", "NAV_LAND")
+        _DEFAULT_RADIUS_M = 30.0
+
+        rows = log_data.mission()
+        if not rows:
+            return None, None, None
+
+        # GPS track
+        gps_table = None
+        _lat_f = _lon_f = ""
+        for msg_type, lat_f, lon_f in _GPS_LAT_CANDIDATES:
+            t = log_data.messages.get(msg_type)
+            if t and lat_f in t and lon_f in t:
+                gps_table = t
+                _lat_f, _lon_f = lat_f, lon_f
+                break
+        if gps_table is None:
+            return None, None, None
+
+        raw_lat = np.asarray(gps_table[_lat_f], dtype=float)
+        raw_lon = np.asarray(gps_table[_lon_f], dtype=float)
+        if raw_lat.size:
+            nonzero = raw_lat[raw_lat != 0]
+            if len(nonzero) and abs(nonzero[0]) > 1000:
+                raw_lat = raw_lat / 1e7
+                raw_lon = raw_lon / 1e7
+        valid = (raw_lat != 0) | (raw_lon != 0)
+        track_lat = raw_lat[valid]
+        track_lon = raw_lon[valid]
+        if len(track_lat) < 2:
+            return None, None, None
+
+        # Waypoint acceptance radius from log parameters
+        wp_radius_m = _DEFAULT_RADIUS_M
+        params = {p["name"]: p["value"] for p in log_data.parameters()}
+        for pname in ("WP_RADIUS", "WPNAV_RADIUS"):
+            if pname in params:
+                val = float(params[pname])
+                # WPNAV_RADIUS is in cm on ArduCopter
+                if pname == "WPNAV_RADIUS":
+                    val /= 100.0
+                wp_radius_m = max(1.0, val)
+                break
+
+        from pymavlink import mavutil as _mavu
+        _MAV_CMD = _mavu.mavlink.enums.get("MAV_CMD", {})
+        _LAT_FIELDS = ["Lat", "lat", "x"]
+        _LON_FIELDS = ["Lng", "Lon", "lon", "y"]
+
+        def _first(d, keys):
+            for k in keys:
+                if k in d:
+                    return d[k]
+            return None
+
+        deviations = []
+        for row in rows:
+            cmd_id = row.get("CId", row.get("command", 0))
+            entry = _MAV_CMD.get(int(cmd_id))
+            name = (entry.name.replace("MAV_CMD_", "") if entry else "") or ""
+            if not any(name.startswith(p) for p in _NAV_PREFIXES):
+                continue
+            lat = _first(row, _LAT_FIELDS)
+            lon = _first(row, _LON_FIELDS)
+            if lat is None or lon is None:
+                continue
+            wp_lat = lat / 1e7 if abs(lat) > 1000 else float(lat)
+            wp_lon = lon / 1e7 if abs(lon) > 1000 else float(lon)
+            if wp_lat == 0 and wp_lon == 0:
+                continue
+
+            φ1 = math.radians(wp_lat)
+            φ2 = np.radians(track_lat)
+            dφ = φ2 - φ1
+            dλ = np.radians(track_lon) - math.radians(wp_lon)
+            a = np.sin(dφ / 2) ** 2 + math.cos(φ1) * np.cos(φ2) * np.sin(dλ / 2) ** 2
+            dist = 2 * _EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+            deviations.append(float(dist.min()))
+
+        if not deviations:
+            return None, None, None
+
+        arr = np.array(deviations)
+        hit_pct = float(np.mean(arr <= wp_radius_m) * 100)
+        return hit_pct, float(arr.mean()), float(arr.max())
 
     def _open_report_dialog(self):
         from app.ui.report_dialog import ReportDialog

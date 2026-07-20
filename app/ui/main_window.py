@@ -68,9 +68,10 @@ RSSI_CANDIDATES = [
 GROUND_SPEED_CANDIDATES = [("GPS", "Spd", 1.0), ("VFR_HUD", "groundspeed", 1.0)]
 # (msg_type, field, divisor) -> value in meters
 ALT_GAUGE_CANDIDATES = [
-    ("BARO", "Alt", 1.0), ("CTUN", "Alt", 1.0), ("GPS", "Alt", 1.0),
+    ("GPS", "Alt", 1.0), ("CTUN", "Alt", 1.0), ("BARO", "Alt", 1.0),
     ("GLOBAL_POSITION_INT", "relative_alt", 1000.0),
 ]
+BARO_ALT_CANDIDATES = [("BARO", "Alt", 1.0), ("CTUN", "Alt", 1.0)]
 # (msg_type, north_field, east_field) -> EKF-estimated wind velocity components, m/s
 WIND_CANDIDATES = [("XKF2", "VWN", "VWE"), ("NKF2", "VWN", "VWE")]
 # (msg_type, field, invert) -> vertical speed in m/s, positive = climb
@@ -956,13 +957,28 @@ class MainWindow(QMainWindow):
         else:
             self.attitude_panel.clear_ground_speed_data()
 
+        _primary_alt_src = None
         for msg_type, field, divisor in ALT_GAUGE_CANDIDATES:
             table = self.log_data.messages.get(msg_type)
             if table and field in table:
                 self.attitude_panel.set_altitude_data(table["timestamp"], table[field] / divisor)
+                _primary_alt_src = (msg_type, field)
                 break
         else:
             self.attitude_panel.clear_altitude_data()
+
+        for msg_type, field, divisor in BARO_ALT_CANDIDATES:
+            if (msg_type, field) == _primary_alt_src:
+                continue
+            table = self.log_data.messages.get(msg_type)
+            if table and field in table:
+                self.attitude_panel.set_baro_altitude_data(
+                    np.asarray(table["timestamp"], dtype=float),
+                    np.asarray(table[field], dtype=float) / divisor,
+                )
+                break
+        else:
+            self.attitude_panel.clear_baro_altitude_data()
 
         for msg_type, field, invert in VSPEED_CANDIDATES:
             table = self.log_data.messages.get(msg_type)
